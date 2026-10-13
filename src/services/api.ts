@@ -5,6 +5,7 @@ import { extractErrorMessage } from 'foxts/extract-error-message'
 import { once } from 'foxts/once'
 import i18n from 'i18next'
 
+import { CUSTOM_BUILD, USER_AGENT } from '@/utils/branding'
 import { debugLog } from '@/utils/debug'
 
 const getUserAgentPromise = once(async () => {
@@ -13,7 +14,7 @@ const getUserAgentPromise = once(async () => {
     return `${name}/${version}`
   } catch (error) {
     console.debug('Failed to build User-Agent, fallback to default', error)
-    return 'clash-verge-rev'
+    return CUSTOM_BUILD ? USER_AGENT : 'clash-verge-rev'
   }
 })
 // Get current IP and geolocation information （refactored IP detection with service-specific mappings）

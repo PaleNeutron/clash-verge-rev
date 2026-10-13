@@ -15,6 +15,7 @@
 <details>
 <summary><strong> ✨ 新增功能 </strong></summary>
 
+- Add build-time customization of installed application, process, service and TUN names.
 
 </details>
 

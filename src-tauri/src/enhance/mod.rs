@@ -1090,6 +1090,38 @@ mod use_tun_tests {
         );
     }
 
+    #[test]
+    fn generated_tun_uses_the_compiled_device_default() {
+        let expected = if cfg!(target_os = "macos") {
+            option_env!("CVR_TUN_DEVICE_MACOS").unwrap_or("utun1024")
+        } else {
+            option_env!("CVR_TUN_DEVICE").unwrap_or("Mihomo")
+        };
+        for device in [Value::Null, Value::from("")] {
+            let empty = mapping(&[("tun", Value::Mapping(mapping(&[("device", device)])))]);
+            let generated = use_tun(empty, true);
+            assert_eq!(
+                tun_of(&generated).get(Value::from("device")),
+                Some(&Value::from(expected))
+            );
+        }
+        let generated = use_tun(Mapping::new(), true);
+        assert_eq!(
+            tun_of(&generated).get(Value::from("device")),
+            Some(&Value::from(expected))
+        );
+        assert_eq!(
+            tun_of(&crate::config::IClashTemp::template().0).get(Value::from("device")),
+            Some(&Value::from(expected))
+        );
+        let chosen = mapping(&[("tun", Value::Mapping(mapping(&[("device", Value::from("chosen0"))])))]);
+        let generated = use_tun(chosen, true);
+        assert_eq!(
+            tun_of(&generated).get(Value::from("device")),
+            Some(&Value::from("chosen0"))
+        );
+    }
+
     #[tokio::test]
     async fn existing_tun_keys_survive_being_switched_on() {
         let config = mapping(&[("tun", Value::Mapping(mapping(&[("stack", Value::from("gvisor"))])))]);

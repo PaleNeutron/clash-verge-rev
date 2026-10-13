@@ -1,0 +1,141 @@
+name: Custom Identity Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      brand:
+        description: 'Base name for installed processes, service, paths and TUN'
+        type: string
+        default: aurora
+      app_name:
+        description: 'Application display name (empty derives from brand)'
+        type: string
+        default: ''
+      overrides:
+        description: 'JSON object of CVR_* identity overrides'
+        type: string
+        default: '{}'
+      platform:
+        description: 'Build and verify platform'
+        type: choice
+        options: [all, linux, windows, macos]
+        default: all
+      compare_defaults:
+        description: 'Also build and verify unconfigured identity'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-identity-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        env:
+          SELECTED_PLATFORM: ${{ inputs.platform }}
+          COMPARE_DEFAULTS: ${{ inputs.compare_defaults }}
+        run: |
+          node <<'JS'
+          const fs = require('node:fs');
+          const targets = [
+            { platform: 'linux', os: 'ubuntu-22.04', target: 'x86_64-unknown-linux-gnu' },
+            { platform: 'windows', os: 'windows-latest', target: 'x86_64-pc-windows-msvc' },
+            { platform: 'macos', os: 'macos-latest', target: 'aarch64-apple-darwin' },
+          ];
+          const selected = targets.filter(x => process.env.SELECTED_PLATFORM === 'all' || x.platform === process.env.SELECTED_PLATFORM);
+          const include = selected.flatMap(x => process.env.COMPARE_DEFAULTS === 'true' ? [{ ...x, variant: 'configured' }, { ...x, variant: 'upstream' }] : [{ ...x, variant: 'configured' }]);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify({ include })}\n`);
+          JS
+
+  build:
+    name: ${{ matrix.platform }} (${{ matrix.variant }})
+    needs: configure
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.configure.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      HUSKY: '0'
+      CARGO_INCREMENTAL: '0'
+      CVR_BUILD_SERVICE_SOURCE: '1'
+      RUST_BACKTRACE: short
+      APPLE_SIGNING_IDENTITY: '-'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: custom-identity-${{ matrix.target }}
+      - name: Resolve build identity
+        shell: bash
+        env:
+          INPUT_BRAND: ${{ inputs.brand }}
+          INPUT_APP_NAME: ${{ inputs.app_name }}
+          INPUT_OVERRIDES: ${{ inputs.overrides }}
+          BUILD_VARIANT: ${{ matrix.variant }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import { buildEnvironment, resolveBuildIdentity } from './scripts/build-identity.mjs';
+          const upstream = process.env.BUILD_VARIANT === 'upstream';
+          const overrides = upstream ? {} : JSON.parse(process.env.INPUT_OVERRIDES);
+          if (!overrides || Array.isArray(overrides) || typeof overrides !== 'object') throw new Error('Overrides must be a JSON object');
+          const known = new Set([...Object.keys(resolveBuildIdentity({})).filter(key => key !== 'CVR_CUSTOM_BUILD'), 'CVR_BRAND']);
+          for (const [key, value] of Object.entries(overrides)) {
+            if (!known.has(key) || typeof value !== 'string') throw new Error(`Unsupported identity override: ${key}`);
+          }
+          const input = { ...process.env, ...(!upstream && process.env.INPUT_BRAND ? { CVR_BRAND: process.env.INPUT_BRAND } : {}), ...(!upstream && process.env.INPUT_APP_NAME ? { CVR_APP_NAME: process.env.INPUT_APP_NAME } : {}), ...overrides };
+          const env = buildEnvironment(input);
+          for (const [key, value] of Object.entries(env)) {
+            if (key.startsWith('CVR_') || key.startsWith('VITE_CVR_')) fs.appendFileSync(process.env.GITHUB_ENV, `${key}=${value}\n`);
+          }
+          JS
+      - name: Install Linux build and runtime dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev libxslt1.1 libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libssl-dev xvfb
+      - name: Install dependencies
+        shell: bash
+        run: |
+          npm install --global pnpm@12.11.2
+          pnpm install --frozen-lockfile
+      - name: Check identity propagation
+        shell: bash
+        run: |
+          pnpm test:identity
+          pnpm typecheck
+          pnpm test src/utils/branding.test.ts src/services/i18n-branding.test.ts src/services/update.test.ts src/components/layout/notice-manager.test.ts
+      - name: Build installers
+        shell: bash
+        run: pnpm build --ci --target ${{ matrix.target }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - name: Verify installed identity
+        shell: bash
+        run: node scripts/verify-installation.mjs ${{ matrix.target }}
+      - name: Upload installers and evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: custom-identity-${{ matrix.platform }}-${{ matrix.variant }}
+          if-no-files-found: error
+          path: |
+            target/${{ matrix.target }}/release/bundle/**/*.exe
+            target/${{ matrix.target }}/release/bundle/**/*.deb
+            target/${{ matrix.target }}/release/bundle/**/*.rpm
+            target/${{ matrix.target }}/release/bundle/**/*.dmg
+            src-tauri/gen/build-identity/identity.json
+            target/identity-verification.json

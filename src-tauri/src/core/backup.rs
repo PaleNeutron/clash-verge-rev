@@ -107,7 +107,10 @@ impl WebDavClient {
                     .use_rustls_tls()
                     .danger_accept_invalid_certs(true)
                     .timeout(Duration::from_secs(op.timeout()))
-                    .user_agent(format!("clash-verge/{APP_VERSION} ({OS} WebDAV-Client)"))
+                    .user_agent(format!(
+                        "{}/{APP_VERSION} ({OS} WebDAV-Client)",
+                        crate::branding::APP_BINARY
+                    ))
                     .redirect(reqwest::redirect::Policy::custom(|attempt| {
                         if attempt.previous().len() >= 5 {
                             attempt.error("重定向次数过多")

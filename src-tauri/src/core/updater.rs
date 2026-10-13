@@ -314,6 +314,9 @@ impl SilentUpdater {
     /// Checks the server; Windows receives `/LANG` to suppress the NSIS language dialog,
     /// see `packages/windows/installer.nsi`.
     async fn check(app_handle: &tauri::AppHandle) -> Result<Option<Update>> {
+        if crate::branding::CUSTOM_BUILD {
+            return Ok(None);
+        }
         let updater_builder = app_handle.updater_builder();
         #[cfg(target_os = "windows")]
         let updater_builder = {
@@ -325,12 +328,16 @@ impl SilentUpdater {
     }
 
     async fn install(update: Update, bytes: Vec<u8>) -> Result<()> {
+        anyhow::ensure!(
+            !crate::branding::CUSTOM_BUILD,
+            "Application updates are disabled for custom builds"
+        );
         Ok(tokio::task::spawn_blocking(move || update.install(&bytes)).await??)
     }
 
     /// Installs a newer cached update before normal startup, if the user confirms.
     pub async fn try_install_on_startup(&self, app_handle: &tauri::AppHandle) -> bool {
-        if !Config::verge().await.latest_arc().auto_check_update.unwrap_or(true) {
+        if crate::branding::CUSTOM_BUILD || !Config::verge().await.latest_arc().auto_check_update.unwrap_or(true) {
             Self::delete_cache();
             return false;
         }
@@ -431,6 +438,10 @@ impl SilentUpdater {
         version: &str,
         on_event: impl Fn(DownloadEvent) + Sync,
     ) -> Result<bool> {
+        anyhow::ensure!(
+            !crate::branding::CUSTOM_BUILD,
+            "Application updates are disabled for custom builds"
+        );
         let cancel = CancellationToken::new();
         *self.manual_cancel.lock() = Some(cancel.clone());
         let prepared = tokio::select! {
@@ -516,7 +527,7 @@ impl SilentUpdater {
         use tauri::{WebviewUrl, WebviewWindowBuilder};
 
         let window = match WebviewWindowBuilder::new(app_handle, "update-splash", WebviewUrl::App("index.html".into()))
-            .title("Clash Verge - Updating")
+            .title(format!("{} - Updating", crate::branding::APP_NAME))
             .inner_size(300.0, 180.0)
             .resizable(false)
             .maximizable(false)
@@ -598,7 +609,7 @@ impl SilentUpdater {
         let cancel = CancellationToken::new();
         *self.background_cancel.lock() = Some(cancel.clone());
         let auto_check = Config::verge().await.latest_arc().auto_check_update.unwrap_or(true);
-        if !auto_check {
+        if crate::branding::CUSTOM_BUILD || !auto_check {
             logging!(debug, Type::System, "Silent update skipped: auto_check_update is false");
             return Ok(());
         }
@@ -681,6 +692,9 @@ impl SilentUpdater {
     }
 
     pub async fn start_background_check(&self, app_handle: tauri::AppHandle) {
+        if crate::branding::CUSTOM_BUILD {
+            return;
+        }
         // Permanent watcher: daily update cycles for the lifetime of the app.
         logging!(info, Type::System, "Silent updater: background task started");
 

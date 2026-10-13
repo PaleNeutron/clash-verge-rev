@@ -19,7 +19,7 @@ import { useProfiles } from '@/hooks/use-profiles'
 import { createProfile, patchProfile } from '@/services/cmds'
 import { mutate } from '@/services/mutate'
 import { showNotice } from '@/services/notice-service'
-import { version } from '@root/package.json'
+import { USER_AGENT } from '@/utils/branding'
 
 import { FileInput } from './file-input'
 
@@ -345,7 +345,7 @@ export function ProfileViewer({ onChange, ref }: ProfileViewerProps) {
               <TextField
                 {...text}
                 {...field}
-                placeholder={`clash-verge/v${version}`}
+                placeholder={USER_AGENT}
                 label={t('profiles.modals.profileForm.fields.userAgent')}
               />
             )}

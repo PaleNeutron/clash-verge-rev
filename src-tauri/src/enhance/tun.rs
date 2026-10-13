@@ -48,6 +48,13 @@ pub fn use_tun(mut config: Mapping, enable: bool) -> Mapping {
         revise!(config, "dns", dns_val);
     }
 
+    if tun_val
+        .get(Value::from("device"))
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        revise!(tun_val, "device", crate::branding::DEFAULT_TUN_DEVICE);
+    }
     revise!(tun_val, "enable", enable);
     revise!(config, "tun", tun_val);
 

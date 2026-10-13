@@ -1,6 +1,8 @@
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 
+import { applyLocaleBranding } from './i18n-branding'
+
 export const supportedLanguages = [
   'en',
   'ru',
@@ -124,6 +126,7 @@ const loadLanguageSections = async (
         }
 
         const module = await loader()
+        applyLocaleBranding(section, module.default)
         return [section, module.default] as const
       }),
     )

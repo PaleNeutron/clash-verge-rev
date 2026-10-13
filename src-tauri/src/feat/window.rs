@@ -231,7 +231,7 @@ where
 {
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::thread::Builder::new()
-        .name("clash-verge-session-ending".into())
+        .name(format!("{}-session-ending", crate::branding::APP_BINARY))
         .spawn(move || {
             let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
                 Ok(runtime) => runtime,

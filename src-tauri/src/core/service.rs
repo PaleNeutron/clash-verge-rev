@@ -461,7 +461,8 @@ where
         .with_context(|| format!("failed to open development Service core source {}", source.display()))?;
 
     let staging_directory = home
-        .join("Applications/.clash-verge-rev-dev")
+        .join("Applications")
+        .join(crate::branding::DEV_SERVICE_DIR)
         .join(staging_directory_name);
     std::fs::create_dir_all(&staging_directory).with_context(|| {
         format!(
@@ -548,7 +549,7 @@ fn service_core_path(clash_core: &str, bin_ext: &str) -> Result<PathBuf> {
                 "failed to locate the current executable while resolving Service core {clash_core:?}: {error}"
             )
         })?
-        .with_file_name(format!("{clash_core}{bin_ext}"));
+        .with_file_name(format!("{}{bin_ext}", crate::branding::core_name(clash_core)));
 
     #[cfg(all(target_os = "macos", feature = "verge-dev"))]
     {
@@ -600,8 +601,8 @@ fn uninstall_service() -> Result<()> {
     use runas::Command as RunasCommand;
     use std::os::windows::process::CommandExt as _;
 
-    let uninstall_path = packaged_service_tool_path("clash-verge-service-uninstall.exe", || {
-        Ok(dirs::service_path()?.with_file_name("clash-verge-service-uninstall.exe"))
+    let uninstall_path = packaged_service_tool_path(&crate::branding::service_tool("uninstall"), || {
+        Ok(dirs::service_path()?.with_file_name(crate::branding::service_tool("uninstall")))
     })?;
 
     if !uninstall_path.exists() {
@@ -629,8 +630,8 @@ fn uninstall_service() -> Result<()> {
 fn uninstall_service() -> Result<()> {
     logging!(info, Type::Service, "uninstall service");
 
-    let uninstall_path = packaged_service_tool_path("clash-verge-service-uninstall", || {
-        Ok(tauri::utils::platform::current_exe()?.with_file_name("clash-verge-service-uninstall"))
+    let uninstall_path = packaged_service_tool_path(&crate::branding::service_tool("uninstall"), || {
+        Ok(tauri::utils::platform::current_exe()?.with_file_name(crate::branding::service_tool("uninstall")))
     })?;
 
     if !uninstall_path.exists() {
@@ -688,8 +689,8 @@ fn linux_running_as_root() -> bool {
 fn uninstall_service() -> Result<()> {
     logging!(info, Type::Service, "uninstall service");
 
-    let uninstall_path = packaged_service_tool_path("clash-verge-service-uninstall", || {
-        Ok(dirs::service_path()?.with_file_name("clash-verge-service-uninstall"))
+    let uninstall_path = packaged_service_tool_path(&crate::branding::service_tool("uninstall"), || {
+        Ok(dirs::service_path()?.with_file_name(crate::branding::service_tool("uninstall")))
     })?;
 
     if !uninstall_path.exists() {
@@ -726,7 +727,7 @@ fn install_service() -> Result<()> {
     let cores = crate::config::IVerge::VALID_CLASH_CORES
         .iter()
         .map(|core| {
-            let name = format!("{core}{}", std::env::consts::EXE_SUFFIX);
+            let name = format!("{}{}", crate::branding::core_name(core), std::env::consts::EXE_SUFFIX);
             clash_verge_service_ipc::management::CoreSource {
                 path: executable.with_file_name(&name),
                 name,
@@ -737,7 +738,7 @@ fn install_service() -> Result<()> {
 }
 
 fn invoke_service_install(cores: &[clash_verge_service_ipc::management::CoreSource], core_only: bool) -> Result<()> {
-    let name = format!("clash-verge-service-install{}", std::env::consts::EXE_SUFFIX);
+    let name = crate::branding::service_tool("install");
     let installer = packaged_service_tool_path(&name, || {
         #[cfg(target_os = "linux")]
         let executable = tauri::utils::platform::current_exe()?;
@@ -839,7 +840,7 @@ pub(super) async fn stage_runtime_by_service(config_file: &Path) -> Result<Stage
 
     let response = clash_verge_service_ipc::stage_runtime(&credentials, &session, &runtime)
         .await
-        .context("无法连接到Clash Verge Service")?;
+        .with_context(|| format!("无法连接到{}", crate::branding::SERVICE_DISPLAY_NAME))?;
     if response.code > 0 {
         return Ok(StageRequest::Refused {
             code: response.code,
@@ -849,7 +850,7 @@ pub(super) async fn stage_runtime_by_service(config_file: &Path) -> Result<Stage
     response
         .data
         .map(StageRequest::Answered)
-        .context("Clash Verge Service 未返回运行时暂存结果")
+        .with_context(|| format!("{} 未返回运行时暂存结果", crate::branding::SERVICE_DISPLAY_NAME))
 }
 
 #[derive(Debug)]
@@ -910,7 +911,7 @@ pub(super) async fn start_with_existing_service(config_file: &Path) -> Result<()
         Err(error) => {
             tracing::Span::current().record("outcome", "ipc-unreachable");
             start_owner_monitor();
-            return Err(error).context("无法连接到Clash Verge Service");
+            return Err(error).with_context(|| format!("无法连接到{}", crate::branding::SERVICE_DISPLAY_NAME));
         }
     };
 
@@ -945,7 +946,9 @@ pub(super) async fn start_with_existing_service(config_file: &Path) -> Result<()
         ));
     }
 
-    let result = response.data.context("Clash Verge Service 未返回会话信息")?;
+    let result = response
+        .data
+        .with_context(|| format!("{} 未返回会话信息", crate::branding::SERVICE_DISPLAY_NAME))?;
     tracing::Span::current().record("generation", result.session.generation);
     let capabilities = probe_service_capabilities().await;
     tracing::Span::current().record("staging", capabilities.runtime_staging);
@@ -1002,7 +1005,7 @@ pub(super) async fn get_clash_logs_by_service() -> Result<Vec<String>> {
         clash_verge_service_ipc::get_clash_logs(&credentials)
     })
     .await;
-    let response = response.context("无法连接到Clash Verge Service")?;
+    let response = response.with_context(|| format!("无法连接到{}", crate::branding::SERVICE_DISPLAY_NAME))?;
 
     if response.code > 0 {
         if response.code == clash_verge_service_ipc::ServiceErrorCode::NotActive as u16 {
@@ -1021,7 +1024,7 @@ pub(crate) async fn get_clash_log_snapshot_by_service() -> Result<String> {
         clash_verge_service_ipc::get_clash_log_snapshot(&credentials)
     })
     .await;
-    let response = response.context("无法连接到Clash Verge Service")?;
+    let response = response.with_context(|| format!("无法连接到{}", crate::branding::SERVICE_DISPLAY_NAME))?;
     if response.code > 0 {
         if response.code == clash_verge_service_ipc::ServiceErrorCode::NotActive as u16 {
             recover_after_owner_loss(generation, OwnerRecoveryReason::Displaced, None).await;
@@ -1333,7 +1336,7 @@ async fn read_chunk(
     };
     let response = clash_verge_service_ipc::read_runtime_file(credentials, session, &request)
         .await
-        .context("无法连接到Clash Verge Service")?;
+        .with_context(|| format!("无法连接到{}", crate::branding::SERVICE_DISPLAY_NAME))?;
     if response.code == ServiceErrorCode::NotActive as u16
         || response.code == ServiceErrorCode::StaleOwnerSession as u16
     {
@@ -1492,7 +1495,7 @@ pub(super) async fn stop_core_by_service() -> Result<()> {
         Ok(response) => response,
         Err(error) => {
             start_owner_monitor();
-            return Err(error).context("无法连接到Clash Verge Service");
+            return Err(error).with_context(|| format!("无法连接到{}", crate::branding::SERVICE_DISPLAY_NAME));
         }
     };
 
@@ -1530,7 +1533,7 @@ pub(crate) async fn update_writer_by_service(writer: &WriterConfig) -> Result<()
     let session = active_service_session()?;
     let response = clash_verge_service_ipc::update_writer(&credentials, &session, writer)
         .await
-        .context("无法连接到Clash Verge Service")?;
+        .with_context(|| format!("无法连接到{}", crate::branding::SERVICE_DISPLAY_NAME))?;
     if response.code > 0 {
         logging!(
             warn,
@@ -1556,7 +1559,7 @@ pub(super) async fn set_system_proxy_by_service_with_session(
     let credentials = current_owner_credentials()?;
     let response = clash_verge_service_ipc::set_system_proxy(&credentials, session, proxy)
         .await
-        .context("无法连接到Clash Verge Service")?;
+        .with_context(|| format!("无法连接到{}", crate::branding::SERVICE_DISPLAY_NAME))?;
     if response.code > 0 {
         logging!(
             warn,
@@ -1567,7 +1570,9 @@ pub(super) async fn set_system_proxy_by_service_with_session(
         );
         bail!(response.message);
     }
-    response.data.context("Clash Verge Service 未返回系统代理结果")
+    response
+        .data
+        .with_context(|| format!("{} 未返回系统代理结果", crate::branding::SERVICE_DISPLAY_NAME))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2112,12 +2117,16 @@ mod tests {
     }
 
     fn staging_directory(home: &Path) -> PathBuf {
-        home.join("Applications/.clash-verge-rev-dev/service-core")
+        home.join("Applications")
+            .join(crate::branding::DEV_SERVICE_DIR)
+            .join("service-core")
     }
 
     #[cfg(unix)]
     fn service_tools_staging_directory(home: &Path) -> PathBuf {
-        home.join("Applications/.clash-verge-rev-dev/service-tools")
+        home.join("Applications")
+            .join(crate::branding::DEV_SERVICE_DIR)
+            .join("service-tools")
     }
 
     #[cfg(unix)]
@@ -2162,10 +2171,7 @@ mod tests {
 
         let selected = service_core_path_for(&source, Some(&home), true)?;
 
-        assert_eq!(
-            selected,
-            home.join("Applications/.clash-verge-rev-dev/service-core/verge-mihomo")
-        );
+        assert_eq!(selected, staging_directory(&home).join("verge-mihomo"));
         assert_eq!(std::fs::read(&selected)?, b"development core");
         let metadata = std::fs::symlink_metadata(&selected)?;
         assert!(metadata.file_type().is_file());
@@ -2202,10 +2208,7 @@ mod tests {
         let source = root.path().join("verge-mihomo");
         std::fs::write(&source, b"first core")?;
         let selected = service_core_path_for(&source, Some(&home), true)?;
-        assert_eq!(
-            selected,
-            home.join("Applications/.clash-verge-rev-dev/service-core/verge-mihomo")
-        );
+        assert_eq!(selected, staging_directory(&home).join("verge-mihomo"));
 
         std::fs::write(&source, b"second core")?;
         let refreshed = service_core_path_for(&source, Some(&home), true)?;
@@ -2261,7 +2264,7 @@ mod tests {
         let home = root.path().join("home");
         let source = root.path().join("verge-mihomo");
         std::fs::write(&source, b"selected core")?;
-        let final_path = home.join("Applications/.clash-verge-rev-dev/service-core/verge-mihomo");
+        let final_path = staging_directory(&home).join("verge-mihomo");
         std::fs::create_dir_all(final_path.parent().unwrap_or_else(|| Path::new(".")))?;
         let symlink_target = root.path().join("must-not-change");
         std::fs::write(&symlink_target, b"target bytes")?;

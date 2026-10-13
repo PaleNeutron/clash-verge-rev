@@ -30,7 +30,13 @@ pub const fn needs_system_notification(state: WindowState) -> bool {
 
 fn notify(title: Cow<'_, str>, body: Cow<'_, str>) {
     let app_handle = handle::Handle::app_handle();
-    app_handle.notification().builder().title(title).body(body).show().ok();
+    app_handle
+        .notification()
+        .builder()
+        .title(title.replace("Clash Verge", crate::branding::APP_NAME))
+        .body(body.replace("Clash Verge", crate::branding::APP_NAME))
+        .show()
+        .ok();
 }
 
 pub async fn notify_event<'a>(event: NotificationEvent<'a>) {

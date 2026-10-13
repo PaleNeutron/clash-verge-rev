@@ -45,7 +45,13 @@ impl RunStateEnv for RealEnv {
             }) {
             let name = format!(
                 "{}{}",
-                crate::config::Config::verge().await.latest_arc().get_valid_clash_core(),
+                crate::branding::core_name(
+                    crate::config::Config::verge()
+                        .await
+                        .latest_arc()
+                        .get_valid_clash_core()
+                        .as_str()
+                ),
                 std::env::consts::EXE_SUFFIX
             );
             let status = clash_verge_service_ipc::inspect_installation(&[clash_verge_service_ipc::CoreRequirement {

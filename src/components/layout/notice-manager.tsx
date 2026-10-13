@@ -19,6 +19,7 @@ import {
   showNotice,
 } from '@/services/notice-service'
 import type { TranslationKey } from '@/types/generated/i18n-keys'
+import { CORE_NAME, CORE_ALPHA_NAME } from '@/utils/branding'
 import { openExternalUrl } from '@/utils/open-external-url'
 
 const SERVICE_PERMISSION_NOTICE =
@@ -27,6 +28,15 @@ const SERVICE_PERMISSION_GUIDE =
   'https://clash-verge-rev.github.io/faq/windows.html#service-core-permissions'
 const SERVICE_OWNER_NOTICE =
   'settings.feedback.notifications.clashService.appDataNotOwned'
+
+const coreProcessNames = [CORE_NAME, CORE_ALPHA_NAME]
+if (CORE_NAME === 'verge-mihomo') coreProcessNames.push('verge-mihomo-al')
+const escapedCoreNames = coreProcessNames
+  .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  .join('|')
+const existingCorePattern = new RegExp(
+  String.raw`process (?:${escapedCoreNames})(?:\.exe)? (?:\(PID (\d+)\) is still running|remains after IPC failure); refusing a second core\s*$`,
+)
 
 type NoticePosition = NonNullable<IVergeConfig['notice_position']>
 type NoticeItem = ReturnType<typeof getSnapshotNotices>[number]
@@ -70,11 +80,7 @@ const resolveNoticeMessage = (
 
   const detail = i18n.params?.message
   const existingCore =
-    typeof detail === 'string'
-      ? /process verge-mihomo(?:-alpha|-al)?(?:\.exe)? (?:\(PID (\d+)\) is still running|remains after IPC failure); refusing a second core\s*$/.exec(
-          detail,
-        )
-      : null
+    typeof detail === 'string' ? existingCorePattern.exec(detail) : null
   if (existingCore && typeof detail === 'string') {
     const permissionRejected = detail.startsWith('Service core rejected:')
     return (

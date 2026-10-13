@@ -23,6 +23,7 @@ import {
 import { mutate } from '@/services/mutate'
 import { showNotice } from '@/services/notice-service'
 import { useSetUpdateState, useUpdateState } from '@/services/states'
+import { CUSTOM_BUILD } from '@/utils/branding'
 import { openExternalUrl } from '@/utils/open-external-url'
 
 type MarkdownNode = {
@@ -200,7 +201,9 @@ export function UpdateViewer({ ref }: { ref?: Ref<DialogRef> }) {
   }, [downloaded, total])
 
   useImperativeHandle(ref, () => ({
-    open: () => setOpen(true),
+    open: () => {
+      if (!CUSTOM_BUILD) setOpen(true)
+    },
     close: () => setOpen(false),
   }))
 
@@ -298,6 +301,8 @@ export function UpdateViewer({ ref }: { ref?: Ref<DialogRef> }) {
       totalRef.current = 0
     }
   })
+
+  if (CUSTOM_BUILD) return null
 
   return (
     <BaseDialog

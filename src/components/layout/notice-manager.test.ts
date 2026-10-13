@@ -2,18 +2,9 @@ import { createInstance } from 'i18next'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { I18nextProvider } from 'react-i18next'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import settings from '@/locales/en/settings.json'
-import {
-  getSnapshotNotices,
-  hideNotice,
-  showNotice,
-  syncSidecarFailure,
-} from '@/services/notice-service'
-
-import { NoticeManager } from './notice-manager'
-
 vi.mock('react', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react')>()),
   useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) =>
@@ -21,8 +12,19 @@ vi.mock('react', async (importOriginal) => ({
 }))
 vi.mock('@/utils/open-external-url', () => ({ openExternalUrl: vi.fn() }))
 
-afterEach(() => {
+beforeEach(() => {
+  vi.stubEnv('VITE_CVR_CORE_NAME', 'verge-mihomo')
+  vi.stubEnv('VITE_CVR_CORE_ALPHA_NAME', 'verge-mihomo-alpha')
+  vi.resetModules()
+})
+
+afterEach(async () => {
+  const { getSnapshotNotices, hideNotice } = await import(
+    '@/services/notice-service'
+  )
   getSnapshotNotices().forEach(({ id }) => hideNotice(id))
+  vi.unstubAllEnvs()
+  vi.resetModules()
 })
 
 it.each([
@@ -41,6 +43,10 @@ it.each([
 ])(
   'explains an occupied core during %s and preserves diagnostics',
   async (operation, detail) => {
+    const { showNotice, syncSidecarFailure } = await import(
+      '@/services/notice-service'
+    )
+    const { NoticeManager } = await import('./notice-manager')
     if (operation === 'startup') {
       showNotice.error('settings.feedback.errors.clash.startFailed', detail)
     } else if (operation === 'restart') {
@@ -65,3 +71,35 @@ it.each([
     }
   },
 )
+
+it('explains an occupied branded core without losing its PID', async () => {
+  vi.stubEnv('VITE_CVR_CORE_NAME', 'aurora-core')
+  vi.stubEnv('VITE_CVR_CORE_ALPHA_NAME', 'aurora-core-alpha')
+  vi.resetModules()
+  const notices = await import('@/services/notice-service')
+  const { NoticeManager: BrandedNoticeManager } = await import(
+    './notice-manager'
+  )
+  const detail =
+    'process aurora-core-alpha.exe (PID 456) is still running; refusing a second core'
+  notices.showNotice.error({ code: 'CORE_RESTART_FAILED', detail })
+  try {
+    const i18n = createInstance()
+    await i18n.init({
+      lng: 'en',
+      resources: { en: { translation: { settings } } },
+    })
+    const html = renderToStaticMarkup(
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(BrandedNoticeManager),
+      ),
+    )
+    expect(html).toContain('a core process is already running')
+    expect(html).toContain('PID 456')
+    expect(html).toContain(detail)
+  } finally {
+    notices.getSnapshotNotices().forEach(({ id }) => notices.hideNotice(id))
+  }
+})

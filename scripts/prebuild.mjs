@@ -10,12 +10,18 @@ import { glob } from 'glob'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { extract } from 'tar'
 
-import { resolveServiceRelease } from './service-release.mjs'
+import {
+  publishServiceBundle,
+  resolveServiceRelease,
+} from './service-release.mjs'
+import { buildEnvironment } from './build-identity.mjs'
 import { log_debug, log_error, log_info, log_success } from './utils.mjs'
 
 /** Prepares platform resources, caching versions and unchanged files unless `--force` is used. */
 
 const cwd = process.cwd()
+const buildEnv = buildEnvironment()
+Object.assign(process.env, buildEnv)
 const TEMP_DIR = path.join(cwd, 'node_modules/.verge')
 const FORCE = process.argv.includes('--force') || process.argv.includes('-f')
 const VERSION_CACHE_FILE = path.join(TEMP_DIR, '.version_cache.json')
@@ -277,8 +283,8 @@ function clashMetaAlpha() {
   const isWin = platform === 'win32'
   const urlExt = isWin ? 'zip' : 'gz'
   return {
-    name: 'verge-mihomo-alpha',
-    targetFile: `verge-mihomo-alpha-${SIDECAR_HOST}${isWin ? '.exe' : ''}`,
+    name: buildEnv.CVR_CORE_ALPHA_NAME,
+    targetFile: `${buildEnv.CVR_CORE_ALPHA_NAME}-${SIDECAR_HOST}${isWin ? '.exe' : ''}`,
     exeFile: `${name}${isWin ? '.exe' : ''}`,
     zipFile: `${name}-${META_ALPHA_VERSION}.${urlExt}`,
     downloadURL: `${META_ALPHA_URL_PREFIX}/${name}-${META_ALPHA_VERSION}.${urlExt}`,
@@ -290,8 +296,8 @@ function clashMeta() {
   const isWin = platform === 'win32'
   const urlExt = isWin ? 'zip' : 'gz'
   return {
-    name: 'verge-mihomo',
-    targetFile: `verge-mihomo-${SIDECAR_HOST}${isWin ? '.exe' : ''}`,
+    name: buildEnv.CVR_CORE_NAME,
+    targetFile: `${buildEnv.CVR_CORE_NAME}-${SIDECAR_HOST}${isWin ? '.exe' : ''}`,
     exeFile: `${name}${isWin ? '.exe' : ''}`,
     zipFile: `${name}-${META_VERSION}.${urlExt}`,
     downloadURL: `${META_URL_PREFIX}/${META_VERSION}/${name}-${META_VERSION}.${urlExt}`,
@@ -510,11 +516,7 @@ const resolvePlugin = async () => {
 
 // Service executable permissions
 const resolveServicePermission = async () => {
-  const serviceExecutables = [
-    'clash-verge-service*',
-    'clash-verge-service-install*',
-    'clash-verge-service-uninstall*',
-  ]
+  const serviceExecutables = [`${buildEnv.CVR_SERVICE_BINARY}*`]
   const hashCache = await loadHashCache()
   let hasChanges = false
 
@@ -528,7 +530,7 @@ const resolveServicePermission = async () => {
           continue
         }
         try {
-          execSync(`chmod 755 ${filePath}`)
+          await fsp.chmod(filePath, 0o755)
           log_success(`chmod finished: "${filePath}"`)
         } catch (e) {
           log_error(`chmod failed for ${filePath}:`, e.message)
@@ -556,7 +558,7 @@ function serviceFileInfo(name) {
   const suffix = platform === 'linux' ? `-${SIDECAR_HOST}` : ''
   return {
     sourceFile: `${name}${ext}`,
-    targetFile: `${name}${suffix}${ext}`,
+    targetFile: `${name.replace('clash-verge-service', buildEnv.CVR_SERVICE_BINARY)}${suffix}${ext}`,
   }
 }
 
@@ -581,6 +583,20 @@ async function resolveServiceBundle() {
       targetPath: path.join(SERVICE_DIR, info.targetFile),
     }
   })
+  const publish = () =>
+    publishServiceBundle(
+      SERVICE_DIR,
+      files.map(({ targetFile }) => targetFile),
+      path.join(
+        TEMP_DIR,
+        `service-bundle-${platform === 'linux' ? SIDECAR_HOST : 'resources'}.json`,
+      ),
+      SERVICE_BINARIES.flatMap((name) =>
+        platform === 'linux'
+          ? [`${name}-${SIDECAR_HOST}`]
+          : [name, `${name}.exe`],
+      ),
+    )
 
   const cargoManifest = await fsp.readFile(
     path.join(cwd, 'src-tauri', 'Cargo.toml'),
@@ -589,7 +605,35 @@ async function resolveServiceBundle() {
   const serviceDependency = cargoManifest
     .split(/\r?\n/)
     .find((line) => line.trimStart().startsWith('clash_verge_service_ipc ='))
-  const sourcePath = serviceDependency?.match(/\bpath\s*=\s*"([^"]+)"/)?.[1]
+  let sourcePath = serviceDependency?.match(/\bpath\s*=\s*"([^"]+)"/)?.[1]
+  if (
+    !sourcePath &&
+    (buildEnv.CVR_CUSTOM_BUILD === '1' ||
+      buildEnv.CVR_BUILD_SERVICE_SOURCE === '1')
+  ) {
+    const repository = serviceDependency?.match(/\bgit\s*=\s*"([^"]+)"/)?.[1]
+    const revision = serviceDependency?.match(
+      /\b(?:rev|tag)\s*=\s*"([^"]+)"/,
+    )?.[1]
+    if (!repository || !revision)
+      throw new Error('Custom service builds require a pinned git source')
+    const checkout = path.join(TEMP_DIR, 'service-source')
+    await fsp.mkdir(TEMP_DIR, { recursive: true })
+    if (!fs.existsSync(path.join(checkout, '.git'))) {
+      execFileSync('git', ['clone', '--no-checkout', repository, checkout], {
+        stdio: 'inherit',
+      })
+    }
+    execFileSync('git', ['-C', checkout, 'fetch', 'origin', revision], {
+      stdio: 'inherit',
+    })
+    execFileSync(
+      'git',
+      ['-C', checkout, 'checkout', '--detach', 'FETCH_HEAD'],
+      { stdio: 'inherit' },
+    )
+    sourcePath = checkout
+  }
   if (sourcePath) {
     const manifest = path.resolve(cwd, 'src-tauri', sourcePath, 'Cargo.toml')
     const targetDirectory = path.join(cwd, 'target', 'bundled-service')
@@ -605,7 +649,7 @@ async function resolveServiceBundle() {
         SIDECAR_HOST,
         '--release',
         '--features',
-        'standalone,client',
+        `standalone,client${buildEnv.CVR_DEVELOPMENT_CHANNEL === '1' ? ',development-channel' : ''}`,
         '--bins',
       ],
       { stdio: 'inherit' },
@@ -619,6 +663,7 @@ async function resolveServiceBundle() {
       if (platform !== 'win32') await fsp.chmod(targetPath, 0o755)
       await updateHashCache(targetPath)
     }
+    await publish()
     return
   }
   const { archiveFile, downloadURL } = resolveServiceRelease(
@@ -660,6 +705,7 @@ async function resolveServiceBundle() {
       log_success(`Extracted service file: ${targetFile}`)
     }
 
+    await publish()
     log_success(`service bundle finished: ${archiveFile}`)
   } finally {
     await fsp.rm(tempDir, { recursive: true, force: true })
@@ -679,8 +725,8 @@ const CORE_HASHES_NSH = path.join(
 async function resolveCoreHashes() {
   const lines = []
   for (const [define, name] of [
-    ['MIHOMO_SHA256', 'verge-mihomo'],
-    ['MIHOMO_ALPHA_SHA256', 'verge-mihomo-alpha'],
+    ['MIHOMO_SHA256', buildEnv.CVR_CORE_NAME],
+    ['MIHOMO_ALPHA_SHA256', buildEnv.CVR_CORE_ALPHA_NAME],
   ]) {
     const sidecar = path.join(SIDECAR_DIR, `${name}-${SIDECAR_HOST}.exe`)
     const digest = createHash('sha256')

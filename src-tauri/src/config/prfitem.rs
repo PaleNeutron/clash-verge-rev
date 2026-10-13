@@ -247,7 +247,7 @@ impl PrfItem {
             }),
             home: None,
             updated: Some(chrono::Local::now().timestamp() as usize),
-            file_data: Some(file_data.unwrap_or_else(|| tmpl::ITEM_LOCAL.into())),
+            file_data: Some(file_data.unwrap_or_else(|| tmpl::branded(tmpl::ITEM_LOCAL).into())),
         })
     }
 
@@ -434,9 +434,9 @@ impl PrfItem {
 
     pub(super) fn from_merge(uid: Option<String>) -> Self {
         let (id, template) = if let Some(uid) = uid {
-            (uid, tmpl::ITEM_MERGE.into())
+            (uid, tmpl::branded(tmpl::ITEM_MERGE).into())
         } else {
-            (help::get_uid("m").into(), tmpl::ITEM_MERGE_EMPTY.into())
+            (help::get_uid("m").into(), tmpl::branded(tmpl::ITEM_MERGE_EMPTY).into())
         };
         let file = format!("{id}.yaml").into();
 
@@ -476,7 +476,7 @@ impl PrfItem {
             itype: Some("rules".into()),
             file: Some(file),
             updated: Some(chrono::Local::now().timestamp() as usize),
-            file_data: Some(tmpl::ITEM_RULES.into()),
+            file_data: Some(tmpl::branded(tmpl::ITEM_RULES).into()),
             ..Default::default()
         }
     }
@@ -490,7 +490,7 @@ impl PrfItem {
             itype: Some("proxies".into()),
             file: Some(file),
             updated: Some(chrono::Local::now().timestamp() as usize),
-            file_data: Some(tmpl::ITEM_PROXIES.into()),
+            file_data: Some(tmpl::branded(tmpl::ITEM_PROXIES).into()),
             ..Default::default()
         }
     }
@@ -504,7 +504,7 @@ impl PrfItem {
             itype: Some("groups".into()),
             file: Some(file),
             updated: Some(chrono::Local::now().timestamp() as usize),
-            file_data: Some(tmpl::ITEM_GROUPS.into()),
+            file_data: Some(tmpl::branded(tmpl::ITEM_GROUPS).into()),
             ..Default::default()
         }
     }

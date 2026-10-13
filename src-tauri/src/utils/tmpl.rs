@@ -50,3 +50,11 @@ append: []
 
 delete: []
 ";
+
+pub fn branded(template: &str) -> std::borrow::Cow<'_, str> {
+    if crate::branding::APP_NAME == "Clash Verge" {
+        template.into()
+    } else {
+        template.replace("Clash Verge", crate::branding::APP_NAME).into()
+    }
+}

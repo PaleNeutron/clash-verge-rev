@@ -23,15 +23,18 @@ import { useVerge } from '@/hooks/use-verge'
 import { changeClashCore, restartCore, upgradeClashCore } from '@/services/cmds'
 import { mutate } from '@/services/mutate'
 import { showNotice } from '@/services/notice-service'
+import { CORE_NAME, CORE_ALPHA_NAME, CUSTOM_BUILD } from '@/utils/branding'
 
 const VALID_CORE = [
   {
-    name: 'Mihomo',
+    name: CUSTOM_BUILD ? CORE_NAME : 'Mihomo',
+    binary: CORE_NAME,
     core: 'verge-mihomo',
     chipKey: 'settings.modals.clashCore.variants.release',
   },
   {
-    name: 'Mihomo Alpha',
+    name: CUSTOM_BUILD ? CORE_ALPHA_NAME : 'Mihomo Alpha',
+    binary: CORE_ALPHA_NAME,
     core: 'verge-mihomo-alpha',
     chipKey: 'settings.modals.clashCore.variants.alpha',
   },
@@ -178,7 +181,7 @@ export function ClashCoreViewer({ ref }: { ref?: Ref<DialogRef> }) {
             onClick={() => onCoreChange(each.core)}
             disabled={changingCore !== null || restarting || upgrading}
           >
-            <ListItemText primary={each.name} secondary={`/${each.core}`} />
+            <ListItemText primary={each.name} secondary={`/${each.binary}`} />
             {changingCore === each.core ? (
               <CircularProgress size={20} sx={{ mr: 1 }} />
             ) : (

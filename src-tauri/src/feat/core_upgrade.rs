@@ -68,7 +68,7 @@ pub async fn upgrade_core(force: bool) -> Result<CoreUpgradeReport> {
 
     // A hard link keeps the previous core reachable without touching the inode the running
     // core executes from, so publishing below stays one atomic rename.
-    let rollback = target.with_file_name(format!(".{core}.rollback"));
+    let rollback = target.with_file_name(format!(".{}.rollback", crate::branding::core_name(&core)));
     let _ = std::fs::remove_file(&rollback);
     // Nothing to roll back to when the core we are replacing could not report a version.
     let restorable = !installed.is_empty() && std::fs::hard_link(&target, &rollback).is_ok();
@@ -164,6 +164,7 @@ enum ServiceStaging {
 /// The sidecar next to the app executable. On macOS development builds the Service runs a
 /// staged copy of this file, so writing here is what makes an upgrade survive the next start.
 fn managed_core_path(core: &str) -> Result<PathBuf> {
+    let core = crate::branding::core_name(core);
     let extension = if cfg!(windows) { ".exe" } else { "" };
     let path = current_exe()
         .context("failed to locate the current executable")?

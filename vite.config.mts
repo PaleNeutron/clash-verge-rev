@@ -4,11 +4,23 @@ import legacy from '@vitejs/plugin-legacy'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import svgr from 'vite-plugin-svgr'
+import { buildEnvironment } from './scripts/build-identity.mjs'
+
+const buildEnv = buildEnvironment()
+Object.assign(process.env, buildEnv)
 
 export default defineConfig({
   root: 'src',
   server: { port: 3000 },
   plugins: [
+    {
+      name: 'build-identity',
+      transformIndexHtml: (html) =>
+        html.replace(
+          /<title>.*?<\/title>/,
+          `<title>${buildEnv.CVR_APP_NAME}</title>`,
+        ),
+    },
     svgr(),
     react(),
     legacy({

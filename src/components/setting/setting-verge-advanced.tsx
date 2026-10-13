@@ -16,6 +16,7 @@ import {
 import { mutate } from '@/services/mutate'
 import { showNotice } from '@/services/notice-service'
 import { checkUpdateSafe as checkUpdate } from '@/services/update'
+import { CUSTOM_BUILD } from '@/utils/branding'
 import { version } from '@root/package.json'
 
 import { BackupViewer } from './mods/backup-viewer'
@@ -85,7 +86,7 @@ const SettingVergeAdvanced = ({ onError: _ }: Props) => {
       <HotkeyViewer ref={hotkeyRef} />
       <MiscViewer ref={miscRef} />
       <LayoutViewer ref={layoutRef} />
-      <UpdateViewer ref={updateRef} />
+      {!CUSTOM_BUILD && <UpdateViewer ref={updateRef} />}
       <BackupViewer ref={backupRef} />
       <LiteModeViewer ref={liteModeRef} />
 
@@ -126,10 +127,12 @@ const SettingVergeAdvanced = ({ onError: _ }: Props) => {
         label={t('settings.components.verge.advanced.fields.openLogsDir')}
       />
 
-      <SettingItem
-        onClick={onCheckUpdate}
-        label={t('settings.components.verge.advanced.fields.checkUpdates')}
-      />
+      {!CUSTOM_BUILD && (
+        <SettingItem
+          onClick={onCheckUpdate}
+          label={t('settings.components.verge.advanced.fields.checkUpdates')}
+        />
+      )}
 
       <SettingItem
         onClick={() => {

@@ -22,6 +22,7 @@ import {
 import { swrConfig } from './services/query-client'
 import { ThemeModeProvider, UpdateStateProvider } from './services/states'
 import { AppStoreProvider } from './store/app-store'
+import { APP_NAME } from './utils/branding'
 import { disableWebViewShortcuts } from './utils/disable-webview-shortcuts'
 
 if (!window.ResizeObserver) {
@@ -34,6 +35,8 @@ const container = document.getElementById(mainElementId)
 if (!container) {
   throw new Error(`No container '${mainElementId}' found to render application`)
 }
+
+document.title = APP_NAME
 
 disableWebViewShortcuts()
 

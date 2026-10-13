@@ -8,18 +8,10 @@ use std::{
 };
 use tauri::Manager as _;
 
-#[cfg(not(feature = "verge-dev"))]
-pub static APP_ID: &str = "io.github.clash-verge-rev.clash-verge-rev";
-#[cfg(not(feature = "verge-dev"))]
-pub static BACKUP_DIR: &str = "clash-verge-rev-backup";
-
-#[cfg(feature = "verge-dev")]
-pub static APP_ID: &str = "io.github.clash-verge-rev.clash-verge-rev.dev";
-#[cfg(feature = "verge-dev")]
-pub static BACKUP_DIR: &str = "clash-verge-rev-backup-dev";
+pub use crate::branding::{APP_ID, BACKUP_DIR};
 
 pub static CLASH_CONFIG: &str = "config.yaml";
-pub static VERGE_CONFIG: &str = "verge.yaml";
+pub static VERGE_CONFIG: &str = crate::branding::VERGE_CONFIG;
 pub static PROFILE_YAML: &str = "profiles.yaml";
 /// Marks that the one-shot raise of too-short auto-update intervals has already run.
 pub static UPDATE_INTERVAL_MIGRATED: &str = ".update-interval-migrated";
@@ -117,13 +109,13 @@ pub fn update_interval_migrated_path() -> Result<PathBuf> {
 #[cfg(target_os = "macos")]
 pub fn service_path() -> Result<PathBuf> {
     let res_dir = app_resources_dir()?;
-    Ok(res_dir.join("clash-verge-service"))
+    Ok(res_dir.join(crate::branding::SERVICE_BINARY))
 }
 
 #[cfg(windows)]
 pub fn service_path() -> Result<PathBuf> {
     let res_dir = app_resources_dir()?;
-    Ok(res_dir.join("clash-verge-service.exe"))
+    Ok(res_dir.join(format!("{}.exe", crate::branding::SERVICE_BINARY)))
 }
 
 pub fn sidecar_log_dir() -> Result<PathBuf> {
@@ -194,7 +186,7 @@ pub fn sidecar_ipc_path() -> Result<PathBuf> {
 
 #[cfg(target_os = "linux")]
 fn sidecar_ipc_path_for(app_root: &std::path::Path, _identity: &clash_verge_service_ipc::OwnerIdentity) -> PathBuf {
-    app_root.join("verge-mihomo.sock")
+    app_root.join(format!("{}.sock", crate::branding::CORE_IPC_NAME))
 }
 
 #[cfg(target_os = "macos")]
@@ -220,9 +212,9 @@ fn sidecar_ipc_path_for(
     let root = std::ffi::CStr::from_bytes_until_nul(&buffer)
         .map_err(|_| anyhow::anyhow!("macOS per-user temporary directory is not NUL-terminated"))?;
     #[cfg(feature = "verge-dev")]
-    let filename = "verge-mihomo-dev.sock";
+    let filename = format!("{}-dev.sock", crate::branding::CORE_IPC_NAME);
     #[cfg(not(feature = "verge-dev"))]
-    let filename = "verge-mihomo.sock";
+    let filename = format!("{}.sock", crate::branding::CORE_IPC_NAME);
     let path = PathBuf::from(OsStr::from_bytes(root.to_bytes())).join(filename);
 
     let path_len = path.as_os_str().as_bytes().len();
@@ -245,7 +237,8 @@ fn sidecar_ipc_path_for(_app_root: &std::path::Path, identity: &clash_verge_serv
 fn sidecar_pipe_name(identity: &clash_verge_service_ipc::OwnerIdentity, is_dev: bool) -> String {
     let flavor = if is_dev { "dev" } else { "release" };
     format!(
-        r"\\.\pipe\verge-mihomo-sidecar-{flavor}-{}",
+        r"\\.\pipe\{}-sidecar-{flavor}-{}",
+        crate::branding::CORE_IPC_NAME,
         clash_verge_service_ipc::owner_key(identity)
     )
 }
@@ -262,7 +255,7 @@ mod ipc_tests {
         let app_root = Path::new("/home/test/.local/share/io.github.clash-verge-rev.clash-verge-rev");
         let path = sidecar_ipc_path_for(app_root, &identity);
 
-        assert_eq!(path, app_root.join("verge-mihomo.sock"));
+        assert_eq!(path, app_root.join(format!("{}.sock", crate::branding::CORE_IPC_NAME)));
         assert_ne!(
             path.to_string_lossy(),
             clash_verge_service_ipc::mihomo_ipc_path(&identity)
@@ -286,9 +279,15 @@ mod ipc_tests {
         assert!(!path.starts_with(app_root));
         assert!(path.as_os_str().as_bytes().len() < 104);
         #[cfg(feature = "verge-dev")]
-        assert_eq!(path.file_name(), Some(OsStr::new("verge-mihomo-dev.sock")));
+        assert_eq!(
+            path.file_name(),
+            Some(OsStr::new(&format!("{}-dev.sock", crate::branding::CORE_IPC_NAME)))
+        );
         #[cfg(not(feature = "verge-dev"))]
-        assert_eq!(path.file_name(), Some(OsStr::new("verge-mihomo.sock")));
+        assert_eq!(
+            path.file_name(),
+            Some(OsStr::new(&format!("{}.sock", crate::branding::CORE_IPC_NAME)))
+        );
         assert_eq!(path, sidecar_ipc_path_for(Path::new("/different/root"), &identity)?);
         assert!(path.parent().is_some_and(Path::is_dir));
         Ok(())
@@ -311,7 +310,8 @@ mod ipc_tests {
         assert_eq!(
             path,
             Path::new(&format!(
-                r"\\.\pipe\verge-mihomo-sidecar-{}-{}",
+                r"\\.\pipe\{}-sidecar-{}-{}",
+                crate::branding::CORE_IPC_NAME,
                 if cfg!(feature = "verge-dev") { "dev" } else { "release" },
                 clash_verge_service_ipc::owner_key(&identity)
             ))
@@ -349,11 +349,14 @@ mod windows_pipe_name_tests {
 
         assert_eq!(
             sidecar_pipe_name(&identity, false),
-            format!(r"\\.\pipe\verge-mihomo-sidecar-release-{owner_key}")
+            format!(
+                r"\\.\pipe\{}-sidecar-release-{owner_key}",
+                crate::branding::CORE_IPC_NAME
+            )
         );
         assert_eq!(
             sidecar_pipe_name(&identity, true),
-            format!(r"\\.\pipe\verge-mihomo-sidecar-dev-{owner_key}")
+            format!(r"\\.\pipe\{}-sidecar-dev-{owner_key}", crate::branding::CORE_IPC_NAME)
         );
     }
 }

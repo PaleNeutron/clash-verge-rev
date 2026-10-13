@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 #![recursion_limit = "512"]
 
+pub mod branding;
 mod cmd;
 pub mod config;
 mod constants;
@@ -45,14 +46,6 @@ mod app_init {
         let mut builder = builder
             .plugin(tauri_plugin_clash_verge_sysinfo::init())
             .plugin(tauri_plugin_notification::init())
-            .plugin(
-                tauri_plugin_updater::Builder::new()
-                    .default_version_comparator(|current, release| {
-                        release.version > current
-                            || core::updater::is_build_to_stable(&current.to_string(), &release.version.to_string())
-                    })
-                    .build(),
-            )
             .plugin(tauri_plugin_clipboard_manager::init())
             .plugin(tauri_plugin_process::init())
             .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -68,6 +61,17 @@ mod app_init {
                     .socket_path(crate::config::IClashTemp::guard_external_controller_ipc())
                     .build(),
             );
+
+        if !crate::branding::CUSTOM_BUILD {
+            builder = builder.plugin(
+                tauri_plugin_updater::Builder::new()
+                    .default_version_comparator(|current, release| {
+                        release.version > current
+                            || core::updater::is_build_to_stable(&current.to_string(), &release.version.to_string())
+                    })
+                    .build(),
+            );
+        }
 
         // Devtools plugin only in debug mode with feature tauri-dev
         // to avoid duplicated registering of logger since the devtools plugin also registers a logger
@@ -166,7 +170,10 @@ pub fn run() -> std::process::ExitCode {
         utils::dirs::preinit_app_data_dir().and_then(|root| core::owner_identity::repair_app_data_root_owner(&root))
     {
         // The logger is installed later in setup(), so this would otherwise be lost.
-        eprintln!("[clash-verge] 应用数据目录所有权修复失败: {error:#}");
+        eprintln!(
+            "[{}] 应用数据目录所有权修复失败: {error:#}",
+            crate::branding::APP_BINARY
+        );
         logging!(error, Type::Setup, "应用数据目录所有权修复失败: {error:#}");
     }
 
@@ -190,7 +197,10 @@ pub fn run() -> std::process::ExitCode {
                     .map(|s| (*s).to_string())
                     .or_else(|| panic.downcast_ref::<String>().cloned())
                     .unwrap_or_else(|| "unknown panic payload".to_string());
-                eprintln!("[clash-verge] panic during app setup ({stage}), continuing in degraded mode: {msg}");
+                eprintln!(
+                    "[{}] panic during app setup ({stage}), continuing in degraded mode: {msg}",
+                    crate::branding::APP_BINARY
+                );
                 logging!(
                     error,
                     Type::Setup,
@@ -270,7 +280,7 @@ pub fn run() -> std::process::ExitCode {
 
             #[cfg(target_os = "macos")]
             if let Some(window) = _app_handle.get_webview_window("main") {
-                let _ = window.set_title("Clash Verge");
+                let _ = window.set_title(crate::branding::APP_NAME);
             }
         }
 

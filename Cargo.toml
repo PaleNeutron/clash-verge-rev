@@ -1,4 +1,5 @@
 [workspace]
+exclude = ["node_modules/.verge/service-source"]
 members = [
   "src-tauri",
   "crates/clash-verge-draft",

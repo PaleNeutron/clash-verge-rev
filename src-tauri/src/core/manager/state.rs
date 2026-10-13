@@ -19,7 +19,11 @@ use tauri_plugin_shell::ShellExt as _;
 
 pub(super) fn explain_core_occupancy(error: anyhow::Error) -> anyhow::Error {
     let detail = error.to_string();
-    if detail.starts_with("process verge-mihomo") && detail.ends_with("; refusing a second core") {
+    if [crate::branding::CORE_NAME, crate::branding::CORE_ALPHA_NAME]
+        .iter()
+        .any(|name| detail.starts_with(&format!("process {name}")))
+        && detail.ends_with("; refusing a second core")
+    {
         error.context(clash_verge_i18n::t!("core.alreadyRunning").into_owned())
     } else {
         error
@@ -191,7 +195,7 @@ impl CoreManager {
         let previous_mask = unsafe { tauri_plugin_clash_verge_sysinfo::libc::umask(0o077) };
         let command = app_handle
             .shell()
-            .sidecar(clash_core.as_str())
+            .sidecar(crate::branding::core_name(clash_core.as_str()))
             .map_err(|error| anyhow::anyhow!("failed to build sidecar command for core {clash_core:?}: {error:#}"))?;
         let command = command.args([
             "-d",
@@ -524,10 +528,16 @@ mod readiness_tests {
     #[test]
     fn core_occupancy_explanation_preserves_the_original_error() {
         for detail in [
-            "process verge-mihomo remains after IPC failure; refusing a second core",
-            "process verge-mihomo-alpha.exe (PID 123) is still running; refusing a second core",
+            format!(
+                "process {} remains after IPC failure; refusing a second core",
+                crate::branding::CORE_NAME
+            ),
+            format!(
+                "process {}.exe (PID 123) is still running; refusing a second core",
+                crate::branding::CORE_ALPHA_NAME
+            ),
         ] {
-            let error = super::explain_core_occupancy(anyhow::anyhow!(detail));
+            let error = super::explain_core_occupancy(anyhow::anyhow!(detail.clone()));
             assert_eq!(error.to_string(), clash_verge_i18n::t!("core.alreadyRunning"));
             assert_eq!(error.root_cause().to_string(), detail);
         }

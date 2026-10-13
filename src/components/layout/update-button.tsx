@@ -3,6 +3,7 @@ import { useRef } from 'react'
 
 import { DialogRef } from '@/components/base'
 import { useUpdate } from '@/hooks/use-update'
+import { CUSTOM_BUILD } from '@/utils/branding'
 
 import { UpdateViewer } from '../setting/mods/update-viewer'
 
@@ -16,7 +17,7 @@ export const UpdateButton = (props: Props) => {
 
   const { updateInfo } = useUpdate()
 
-  if (!updateInfo?.available) return null
+  if (CUSTOM_BUILD || !updateInfo?.available) return null
 
   return (
     <>
