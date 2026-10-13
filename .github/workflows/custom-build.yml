@@ -183,6 +183,10 @@ jobs:
         if: inputs.reuse_run == ''
         shell: bash
         run: pnpm build --ci --target ${{ matrix.target }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - name: Verify Windows staged executable owners
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: cargo test --manifest-path node_modules/.verge/service-source/Cargo.toml --target-dir target/bundled-service --target ${{ matrix.target }} --features standalone,client --bin clash-verge-service-install newly_staged_core_and_service_have_a_trusted_installer_owner
       - name: Verify installed identity
         shell: bash
         run: node scripts/verify-installation.mjs ${{ matrix.target }}

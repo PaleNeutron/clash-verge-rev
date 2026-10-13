@@ -46,8 +46,9 @@ const check = (name) => {
   console.log(`Verified ${name}`)
 }
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-async function waitFor(predicate, description) {
-  for (let attempt = 0; attempt < 60; attempt++) {
+async function waitFor(predicate, description, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
     if (await predicate()) return
     await delay(500)
   }
@@ -143,29 +144,59 @@ async function launchApplication(app, stage) {
 }
 
 async function waitForApplication(predicate, description) {
-  await waitFor(() => {
-    const record = appRuns.at(-1)?.record
-    assert.ok(
-      !record?.spawnError,
-      `Application spawn failed: ${record?.spawnError}`,
-    )
-    assert.ok(
-      !record?.closed,
-      `Application exited before ${description}: ${JSON.stringify(record)}`,
-    )
-    return predicate()
-  }, description)
+  await waitFor(
+    () => {
+      const record = appRuns.at(-1)?.record
+      assert.ok(
+        !record?.spawnError,
+        `Application spawn failed: ${record?.spawnError}`,
+      )
+      assert.ok(
+        !record?.closed,
+        `Application exited before ${description}: ${JSON.stringify(record)}`,
+      )
+      return predicate()
+    },
+    description,
+    120000,
+  )
 }
 
-async function stopApplication(app) {
+async function stopApplication(app, force = false) {
   if (running(identity.CVR_APP_BINARY)) {
     if (windows)
       powershell(
         `Get-Process -Name '${identity.CVR_APP_BINARY}' -ErrorAction SilentlyContinue | Stop-Process -Force`,
       )
-    else run('pkill', ['-f', app])
+    else if (macos && !force) {
+      run('osascript', [
+        '-e',
+        `tell application id "${identity.CVR_APP_ID}" to quit`,
+      ])
+      await waitFor(
+        () => !running(identity.CVR_APP_BINARY),
+        'macOS application normal Quit',
+      )
+      await waitFor(
+        () =>
+          !running(identity.CVR_CORE_NAME) &&
+          !running(identity.CVR_CORE_ALPHA_NAME),
+        'core shutdown after macOS application normal Quit',
+      )
+    } else {
+      const pattern =
+        !macos && !force
+          ? `^${app.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`
+          : app
+      run('pkill', ['-f', pattern])
+      if (!macos && !force)
+        await waitFor(
+          () => !running(identity.CVR_APP_BINARY),
+          'Linux application shutdown before closing its display',
+        )
+    }
   }
-  appProcess?.kill()
+  if (!macos || force) appProcess?.kill()
   const current = appRuns.at(-1)
   if (current) await Promise.race([current.closed, delay(3000)])
   appProcess = undefined
@@ -555,7 +586,7 @@ try {
   await captureApplicationLogs('before-cleanup')
   if (appProcess && appExecutable) {
     try {
-      await stopApplication(appExecutable)
+      await stopApplication(appExecutable, true)
     } catch (error) {
       evidence.runtimeLogErrors ??= []
       evidence.runtimeLogErrors.push(`Application cleanup: ${error.message}`)
