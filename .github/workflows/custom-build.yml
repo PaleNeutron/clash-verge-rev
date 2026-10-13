@@ -186,6 +186,33 @@ jobs:
       - name: Verify installed identity
         shell: bash
         run: node scripts/verify-installation.mjs ${{ matrix.target }}
+      - name: Print application diagnosis
+        if: failure()
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs/promises';
+          import path from 'node:path';
+          const root = 'target/identity-runtime-logs';
+          for (const subdirectory of ['', 'before-cleanup', 'after-process-exit']) {
+            const directory = path.join(root, subdirectory);
+            const names = await fs.readdir(directory).catch(() => []);
+            for (const name of names.filter(name => name.endsWith('.log'))) {
+              console.log(`Application log: ${path.join(directory, name)}`);
+              const lines = (await fs.readFile(path.join(directory, name), 'utf8')).split('\n').slice(-60);
+              for (const line of lines) console.log(/token|secret|password|authorization/i.test(line) ? '[credential-related line omitted]' : line);
+            }
+          }
+          JS
+      - name: Upload runtime diagnosis
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: identity-diagnostics-${{ matrix.platform }}-${{ matrix.variant }}
+          if-no-files-found: ignore
+          path: |
+            target/identity-verification.json
+            target/identity-runtime-logs/**
       - name: Upload installers and evidence
         if: always()
         uses: actions/upload-artifact@v7

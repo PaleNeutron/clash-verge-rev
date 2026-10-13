@@ -137,7 +137,9 @@ registered service metadata, client/service IPC, stable and alpha core processes
 TUN interfaces, installed launcher names and targets, the main application
 process and removal of the installed service/application. It does not route runner traffic through TUN during these
 checks. The evidence artifact records each completed check, any failure, installer
-provenance and application runtime logs from the fresh runner.
+provenance and application runtime logs from the fresh runner. A separate
+`identity-diagnostics-*` artifact provides the same evidence without downloading
+the installers.
 
 Scheduled task, LaunchAgent and XDG autostart creation/removal require toggling
 the setting in the running application. This workflow does not automate that
