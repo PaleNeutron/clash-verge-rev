@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: custom-identity-${{ github.ref }}
+  group: custom-identity-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
