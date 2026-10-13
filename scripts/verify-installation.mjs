@@ -96,6 +96,72 @@ function applicationDataDirectory() {
   return path.join(base, identity.CVR_APP_ID)
 }
 
+async function prepareLinuxThemeComparison(app) {
+  if (process.platform !== 'linux') return
+  assert.equal(
+    process.env.GITHUB_ACTIONS,
+    'true',
+    'Theme diagnostic requires a fresh hosted runner',
+  )
+  const filename =
+    identity.CVR_CUSTOM_BUILD === '1'
+      ? `${identity.CVR_APP_BINARY}-settings.yaml`
+      : 'verge.yaml'
+  const settingsFile = path.join(applicationDataDirectory(), filename)
+  const existing = await fs.stat(settingsFile).catch((error) => {
+    if (error.code === 'ENOENT') return null
+    throw error
+  })
+  assert.equal(
+    existing,
+    null,
+    'Theme diagnostic must not replace existing user settings',
+  )
+  try {
+    appProcess = await launchApplication(
+      app,
+      'system-theme-settings-generation',
+    )
+    await waitForApplication(
+      async () =>
+        !!(await fs.stat(settingsFile).catch((error) => {
+          if (error.code === 'ENOENT') return null
+          throw error
+        })),
+      'compiled default settings generation',
+    )
+  } finally {
+    if (appProcess) await stopApplication(app, true)
+  }
+  await waitFor(
+    () => !running(identity.CVR_APP_BINARY),
+    'settings-generation application exit',
+  )
+  assert.ok(
+    !running(identity.CVR_CORE_NAME) && !running(identity.CVR_CORE_ALPHA_NAME),
+    'Settings-generation launch must leave no core running',
+  )
+  await captureApplicationLogs('system-theme-settings-generation')
+  const settings = await fs.readFile(settingsFile, 'utf8')
+  const theme = /^theme_mode:[ \t]*(?:system|"system"|'system')[ \t]*$/gm
+  assert.equal(
+    settings.match(theme)?.length,
+    1,
+    'Expected compiled default system theme in fresh settings',
+  )
+  await fs.writeFile(settingsFile, settings.replace(theme, 'theme_mode: light'))
+  evidence.diagnostic = {
+    comparison: 'compiled defaults with only theme_mode changed',
+    originalThemeMode: 'system',
+    themeMode: 'light',
+    settingsFile,
+    productionCodeChanged: false,
+  }
+  console.log(
+    'Diagnostic comparison: generated default settings preserved; theme_mode changed from system to light',
+  )
+}
+
 async function launchApplication(app, stage) {
   await fs.mkdir(runtimeLogs, { recursive: true })
   const stdoutPath = path.join(runtimeLogs, `${stage}-stdout.log`)
@@ -511,6 +577,7 @@ try {
     }
   }
 
+  await prepareLinuxThemeComparison(app)
   appProcess = await launchApplication(app, 'service-launch')
   await waitForApplication(
     () => running(identity.CVR_APP_BINARY),
