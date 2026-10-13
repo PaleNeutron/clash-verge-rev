@@ -122,6 +122,15 @@ async fn bind_primary_listener(preferred: Option<u16>) -> Result<tokio::net::Tcp
     }
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
+fn is_scheme_argument(arg: &str) -> bool {
+    arg.split_once(':').is_some_and(|(scheme, _)| {
+        crate::branding::url_schemes()
+            .iter()
+            .any(|supported| scheme.eq_ignore_ascii_case(supported))
+    })
+}
+
 async fn notify_existing_instance(record: &InstanceRecord) -> bool {
     let client = match ClientBuilder::new().timeout(Duration::from_millis(500)).build() {
         Ok(client) => client,
@@ -129,7 +138,7 @@ async fn notify_existing_instance(record: &InstanceRecord) -> bool {
     };
     #[cfg(not(target_os = "macos"))]
     let request = if let Some(arg) = std::env::args().nth(1).as_deref() {
-        if arg.starts_with("clash:") {
+        if is_scheme_argument(arg) {
             client
                 .get(format!("http://127.0.0.1:{}/commands/scheme", record.port))
                 .query(&[("param", arg)])
@@ -450,4 +459,29 @@ fn write_instance_record(path: &Path, record: &InstanceRecord) -> Result<()> {
     drop(file);
     std::fs::rename(&temporary, path).context("failed to replace singleton record")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod scheme_argument_tests {
+    #[test]
+    fn secondary_instance_forwards_the_configured_scheme_and_default_aliases() {
+        for scheme in [
+            crate::branding::URL_SCHEME.to_owned(),
+            crate::branding::URL_SCHEME.to_ascii_uppercase(),
+        ] {
+            assert!(super::is_scheme_argument(&format!(
+                "{scheme}://install-config?url=https://example.com/profile"
+            )));
+        }
+        assert_eq!(
+            super::is_scheme_argument("ClAsH://install-config"),
+            !crate::branding::CUSTOM_BUILD || crate::branding::URL_SCHEME.eq_ignore_ascii_case("clash")
+        );
+        assert!(!super::is_scheme_argument("https://example.com/profile"));
+        assert!(!super::is_scheme_argument(&format!(
+            "{}-other://install-config",
+            crate::branding::URL_SCHEME
+        )));
+        assert!(!super::is_scheme_argument("ordinary argument"));
+    }
 }
