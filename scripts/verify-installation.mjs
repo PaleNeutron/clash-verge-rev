@@ -175,14 +175,55 @@ async function stopApplication(app, force = false) {
         `Get-Process -Name '${identity.CVR_APP_BINARY}' -ErrorAction SilentlyContinue | Stop-Process -Force`,
       )
     else if (macos && !force) {
-      run('osascript', [
-        '-e',
-        `tell application id "${identity.CVR_APP_ID}" to quit`,
-      ])
-      await waitFor(
-        () => !running(identity.CVR_APP_BINARY),
-        'macOS application normal Quit',
+      const record = appRuns.at(-1)?.record
+      const pid = record?.pid
+      assert.ok(
+        Number.isInteger(pid) && pid > 0,
+        'Normal Quit requires a recorded application PID',
       )
+      const request = {
+        targetPid: pid,
+        requestedAt: new Date().toISOString(),
+      }
+      record.normalQuit = request
+      const result = run(
+        'osascript',
+        [
+          '-l',
+          'JavaScript',
+          '-e',
+          `ObjC.import('AppKit');
+        const application = $.NSRunningApplication.runningApplicationWithProcessIdentifier(${pid});
+        if (ObjC.unwrap(application.executableURL.path) !== ${JSON.stringify(app)})
+          throw new Error('Normal Quit target does not match the installed executable');
+        Boolean(application.terminate);`,
+        ],
+        { timeout: 10000 },
+      )
+      request.accepted = result === 'true'
+      assert.ok(
+        request.accepted,
+        `macOS normal Quit request for PID ${pid} was rejected: ${result}`,
+      )
+      try {
+        await waitFor(
+          () => !running(identity.CVR_APP_BINARY),
+          'macOS application normal Quit',
+        )
+      } catch (error) {
+        request.samplePath = path.join(
+          runtimeLogs,
+          `${record.stage}-normal-quit-sample.log`,
+        )
+        try {
+          run('sample', [String(pid), '1', '1', '-file', request.samplePath], {
+            timeout: 5000,
+          })
+        } catch (sampleError) {
+          request.sampleError = sampleError.message
+        }
+        throw error
+      }
       await waitFor(
         () =>
           !running(identity.CVR_CORE_NAME) &&
