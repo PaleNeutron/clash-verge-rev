@@ -102,6 +102,11 @@ async function launchApplication(app, stage) {
   const stderrPath = path.join(runtimeLogs, `${stage}-stderr.log`)
   const stdout = await fs.open(stdoutPath, 'w')
   const stderr = await fs.open(stderrPath, 'w')
+  const env = {
+    ...process.env,
+    RUST_LOG:
+      process.env.IDENTITY_APP_LOG_LEVEL || process.env.RUST_LOG || 'info',
+  }
   const record = {
     stage,
     executable: app,
@@ -115,9 +120,10 @@ async function launchApplication(app, stage) {
     const child =
       process.platform === 'linux'
         ? spawn('xvfb-run', ['-a', app], {
+            env,
             stdio: ['ignore', stdout.fd, stderr.fd],
           })
-        : spawn(app, [], { stdio: ['ignore', stdout.fd, stderr.fd] })
+        : spawn(app, [], { env, stdio: ['ignore', stdout.fd, stderr.fd] })
     record.pid = child.pid
     const closed = new Promise((resolve) => {
       child.on('error', (error) => {

@@ -24,6 +24,8 @@ variables go in the `overrides` JSON input, for example:
 Each platform uploads installers, the resolved `identity.json`, and installed
 runtime evidence in `identity-verification.json`. Builds use the pinned service
 fork source and do not require the upstream project's signing secrets.
+Set `app_log_level=debug` to capture application startup diagnostics during
+verification; service driver output remains unchanged.
 Enable `compare_defaults` to also build and verify the unconfigured identity.
 The comparison jobs omit updater signing artifacts so they can run without
 upstream private signing keys; normal local build defaults retain those artifacts.

@@ -24,6 +24,11 @@ on:
         description: 'Reuse matching installers from an earlier identity build run'
         type: string
         default: ''
+      app_log_level:
+        description: 'Application log level during installed verification'
+        type: choice
+        options: [info, debug]
+        default: info
       compare_defaults:
         description: 'Also build and verify unconfigured identity'
         type: boolean
@@ -188,6 +193,8 @@ jobs:
         shell: bash
         run: cargo test --manifest-path node_modules/.verge/service-source/Cargo.toml --target-dir target/bundled-service --target ${{ matrix.target }} --features standalone,client --bin clash-verge-service-install newly_staged_core_and_service_have_a_trusted_installer_owner
       - name: Verify installed identity
+        env:
+          IDENTITY_APP_LOG_LEVEL: ${{ inputs.app_log_level }}
         shell: bash
         run: node scripts/verify-installation.mjs ${{ matrix.target }}
       - name: Print application diagnosis
