@@ -127,9 +127,15 @@ promise that inspecting software or network traffic cannot identify the engine.
 
 The Actions job installs the produced package and checks executable names,
 registered service metadata, client/service IPC, stable and alpha core processes,
-TUN interfaces, the main application process and removal of the installed
-service/application. It does not route runner traffic through TUN during these
+TUN interfaces, installed launcher names and targets, the main application
+process and removal of the installed service/application. It does not route runner traffic through TUN during these
 checks. The evidence artifact records each completed check and any failure.
+
+Scheduled task, LaunchAgent and XDG autostart creation/removal require toggling
+the setting in the running application. This workflow does not automate that
+GUI interaction, and prewriting the saved preference does not register the entry
+on launch. The evidence records this runtime verification limitation; installed
+launchers are checked separately.
 
 Run the build-contract regressions with `pnpm test:identity`. Frontend identity
 regressions run with the normal `pnpm test` command. Both default and customized

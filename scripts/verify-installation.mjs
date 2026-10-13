@@ -10,7 +10,14 @@ const identity = resolveBuildIdentity()
 const target = process.argv[2]
 assert.ok(target, 'Verification requires a target triple')
 const bundle = path.resolve('target', target, 'release', 'bundle')
-const evidence = { target, identity, checks: [] }
+const evidence = {
+  target,
+  identity,
+  checks: [],
+  limitations: [
+    'Autostart entry creation and removal require toggling the application setting. Hosted GUI setting automation is unavailable in this workflow; persisted enable_auto_launch values do not apply OS registration on launch. Scheduled task, LaunchAgent and XDG autostart creation/removal are therefore not runtime-verified.',
+  ],
+}
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'installed-identity-'))
 const windows = process.platform === 'win32'
 const macos = process.platform === 'darwin'
@@ -65,6 +72,64 @@ function running(name) {
   return run('ps', ['-axo', 'comm'])
     .split('\n')
     .some((line) => path.basename(line.trim()) === name)
+}
+
+async function verifyInstalledLauncher(app) {
+  if (windows) {
+    const shortcutName = `${identity.CVR_APP_NAME}.lnk`.replaceAll("'", "''")
+    const shortcuts = JSON.parse(
+      powershell(
+        `$shell = New-Object -ComObject WScript.Shell; $roots = @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('CommonPrograms')); $entries = @($roots | Select-Object -Unique | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -Filter '*.lnk' } | Where-Object { $_.Name -eq '${shortcutName}' } | ForEach-Object { [PSCustomObject]@{ Path = $_.FullName; Target = $shell.CreateShortcut($_.FullName).TargetPath } }); ConvertTo-Json -InputObject $entries -Compress`,
+      ),
+    )
+    assert.ok(shortcuts.length > 0, 'Installed Start menu shortcut is missing')
+    for (const shortcut of shortcuts)
+      assert.equal(
+        path.resolve(shortcut.Target).toLowerCase(),
+        path.resolve(app).toLowerCase(),
+        `Wrong Start menu shortcut target: ${shortcut.Path}`,
+      )
+    evidence.launcher = shortcuts
+    check('installed Start menu shortcut name and executable target')
+  } else if (macos) {
+    const plist = path.join(path.dirname(appDirectory), 'Info.plist')
+    const executable = run('/usr/libexec/PlistBuddy', [
+      '-c',
+      'Print :CFBundleExecutable',
+      plist,
+    ])
+    assert.equal(executable, identity.CVR_APP_BINARY)
+    assert.equal(path.join(appDirectory, executable), app)
+    evidence.launcher = { plist, executable }
+    check('installed application bundle executable target')
+  } else {
+    const desktop = run('dpkg', ['-L', packageName])
+      .split('\n')
+      .find((file) =>
+        file.endsWith(`/applications/${identity.CVR_APP_BINARY}.desktop`),
+      )
+    assert.ok(desktop, 'Installed desktop launcher is missing')
+    const entries = Object.fromEntries(
+      (await fs.readFile(desktop, 'utf8'))
+        .split(/\r?\n/)
+        .filter((line) => /^(Name|Exec)=/.test(line))
+        .map((line) => [
+          line.slice(0, line.indexOf('=')),
+          line.slice(line.indexOf('=') + 1),
+        ]),
+    )
+    assert.equal(entries.Name, identity.CVR_APP_NAME)
+    const command = entries.Exec?.match(/^(?:"([^"\n]+)"|(\S+))/)
+    assert.ok(command, 'Installed desktop launcher has no executable')
+    const executable = command[1] ?? command[2]
+    assert.equal(path.basename(executable), identity.CVR_APP_BINARY)
+    const target = path.isAbsolute(executable)
+      ? executable
+      : run('which', [executable])
+    assert.equal(await fs.realpath(target), await fs.realpath(app))
+    evidence.launcher = { desktop, name: entries.Name, executable: target }
+    check('installed desktop launcher display name and executable target')
+  }
 }
 
 let appDirectory
@@ -147,6 +212,7 @@ try {
     )
   run(stable, ['-v'])
   run(alpha, ['-v'])
+  await verifyInstalledLauncher(app)
   check(
     'installed application, stable/alpha cores and service helper filenames',
   )
@@ -308,6 +374,16 @@ try {
   else privileged('dpkg', ['-r', packageName])
   assert.ok(!(await fs.stat(app).catch(() => null)))
   check('installed application removal')
+  const launcherPaths = windows
+    ? evidence.launcher.map((shortcut) => shortcut.Path)
+    : [macos ? evidence.launcher.plist : evidence.launcher.desktop]
+  await waitFor(async () => {
+    const entries = await Promise.all(
+      launcherPaths.map((filename) => fs.stat(filename).catch(() => null)),
+    )
+    return entries.every((entry) => entry === null)
+  }, 'installed launcher removal')
+  check('installed application launcher removal')
   evidence.success = true
 } catch (error) {
   evidence.success = false
