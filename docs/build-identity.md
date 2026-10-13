@@ -28,6 +28,13 @@ Enable `compare_defaults` to also build and verify the unconfigured identity.
 The comparison jobs omit updater signing artifacts so they can run without
 upstream private signing keys; normal local build defaults retain those artifacts.
 
+For verification-only changes, `reuse_run` can reference an earlier run in this
+fork that originally produced the installers; chained reuse is rejected. The
+workflow requires the same resolved identity and rejects changes to
+application, dependency, installer or build source since that run. It then checks
+the existing installers with the current verifier, recording both revisions.
+A change to build inputs requires a new build.
+
 ## Local build
 
 Install the prerequisites in [CONTRIBUTING.md](../CONTRIBUTING.md), then run:
@@ -129,7 +136,8 @@ The Actions job installs the produced package and checks executable names,
 registered service metadata, client/service IPC, stable and alpha core processes,
 TUN interfaces, installed launcher names and targets, the main application
 process and removal of the installed service/application. It does not route runner traffic through TUN during these
-checks. The evidence artifact records each completed check and any failure.
+checks. The evidence artifact records each completed check, any failure, installer
+provenance and application runtime logs from the fresh runner.
 
 Scheduled task, LaunchAgent and XDG autostart creation/removal require toggling
 the setting in the running application. This workflow does not automate that

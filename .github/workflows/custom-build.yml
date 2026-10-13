@@ -20,6 +20,10 @@ on:
         type: choice
         options: [all, linux, windows, macos]
         default: all
+      reuse_run:
+        description: 'Reuse matching installers from an earlier identity build run'
+        type: string
+        default: ''
       compare_defaults:
         description: 'Also build and verify unconfigured identity'
         type: boolean
@@ -27,6 +31,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: custom-identity-${{ github.ref }}-${{ github.sha }}
@@ -80,6 +85,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: custom-identity-${{ matrix.target }}
+          cache-on-failure: true
       - name: Resolve build identity
         shell: bash
         env:
@@ -120,7 +126,61 @@ jobs:
           pnpm test:identity
           pnpm typecheck
           pnpm test src/utils/branding.test.ts src/services/i18n-branding.test.ts src/services/update.test.ts src/components/layout/notice-manager.test.ts
+      - name: Download existing installers
+        if: inputs.reuse_run != ''
+        uses: actions/download-artifact@v7
+        with:
+          name: custom-identity-${{ matrix.platform }}-${{ matrix.variant }}
+          run-id: ${{ inputs.reuse_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/reused-installers
+      - name: Validate and prepare reused installers
+        if: inputs.reuse_run != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REUSE_RUN_ID: ${{ inputs.reuse_run }}
+          REUSE_DIRECTORY: ${{ runner.temp }}/reused-installers
+          BUILD_TARGET: ${{ matrix.target }}
+          BUILD_PLATFORM: ${{ matrix.platform }}
+          BUILD_VARIANT: ${{ matrix.variant }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs/promises';
+          import path from 'node:path';
+          import { execFileSync } from 'node:child_process';
+          import { resolveBuildIdentity } from './scripts/build-identity.mjs';
+          assert.match(process.env.REUSE_RUN_ID, /^\d+$/);
+          const run = JSON.parse(execFileSync('gh', ['api', `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.REUSE_RUN_ID}`], { encoding: 'utf8' }));
+          assert.equal(run.path, '.github/workflows/custom-build.yml');
+          assert.equal(run.event, 'workflow_dispatch');
+          assert.equal(run.head_repository.full_name, process.env.GITHUB_REPOSITORY);
+          assert.match(run.head_sha, /^[0-9a-f]{40}$/);
+          const pages = JSON.parse(execFileSync('gh', ['api', '--paginate', '--slurp', `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.REUSE_RUN_ID}/jobs?per_page=100`], { encoding: 'utf8' }));
+          const producer = pages.flatMap(page => page.jobs).find(job => job.name === `${process.env.BUILD_PLATFORM} (${process.env.BUILD_VARIANT})`);
+          assert.ok(producer?.steps.some(step => step.name === 'Build installers' && step.conclusion === 'success'), 'Selected run did not produce these installers; select the original build run');
+          const previous = JSON.parse(await fs.readFile(path.join(process.env.REUSE_DIRECTORY, 'target/identity-verification.json'), 'utf8').catch(error => {
+            if (error.code === 'ENOENT') return '{}';
+            throw error;
+          }));
+          if (previous.installerRunId != null) assert.equal(String(previous.installerRunId), process.env.REUSE_RUN_ID, 'Select the original installer-producing run, not a reuse run');
+          if (previous.installerHeadSha != null) assert.equal(previous.installerHeadSha, run.head_sha, 'Installer provenance does not match the selected run');
+          execFileSync('git', ['fetch', 'origin', run.head_sha], { stdio: 'inherit' });
+          const changed = execFileSync('git', ['diff', '--name-only', run.head_sha, 'HEAD'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+          const allowed = file => file.startsWith('.github/') || file.startsWith('docs/') || file === 'scripts/verify-installation.mjs' || /\.test\.(?:tsx?|mjs)$/.test(file);
+          assert.ok(changed.every(allowed), `Installer build inputs changed: ${changed.filter(file => !allowed(file)).join(', ')}`);
+          const recorded = JSON.parse(await fs.readFile(path.join(process.env.REUSE_DIRECTORY, 'src-tauri/gen/build-identity/identity.json'), 'utf8'));
+          assert.deepEqual(recorded, resolveBuildIdentity());
+          const bundle = path.join('target', process.env.BUILD_TARGET, 'release', 'bundle');
+          await fs.mkdir(path.dirname(bundle), { recursive: true });
+          await fs.cp(path.join(process.env.REUSE_DIRECTORY, bundle), bundle, { recursive: true });
+          await fs.appendFile(process.env.GITHUB_ENV, `IDENTITY_INSTALLER_RUN_ID=${process.env.REUSE_RUN_ID}\nIDENTITY_INSTALLER_HEAD_SHA=${run.head_sha}\n`);
+          JS
+          node scripts/build.mjs --prepare-only --target ${{ matrix.target }}
+          node scripts/prebuild.mjs ${{ matrix.target }}
       - name: Build installers
+        if: inputs.reuse_run == ''
         shell: bash
         run: pnpm build --ci --target ${{ matrix.target }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
       - name: Verify installed identity
@@ -139,3 +199,5 @@ jobs:
             target/${{ matrix.target }}/release/bundle/**/*.dmg
             src-tauri/gen/build-identity/identity.json
             target/identity-verification.json
+            target/identity-runtime-logs/**
+            target/bundled-service/${{ matrix.target }}/release/service-integration-driver*

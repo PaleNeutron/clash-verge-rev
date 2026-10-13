@@ -14,6 +14,11 @@ const evidence = {
   target,
   identity,
   checks: [],
+  installerRunId:
+    process.env.IDENTITY_INSTALLER_RUN_ID ?? process.env.GITHUB_RUN_ID ?? null,
+  installerHeadSha:
+    process.env.IDENTITY_INSTALLER_HEAD_SHA ?? process.env.GITHUB_SHA ?? null,
+  verifierHeadSha: process.env.GITHUB_SHA ?? null,
   limitations: [
     'Autostart entry creation and removal require toggling the application setting. Hosted GUI setting automation is unavailable in this workflow; persisted enable_auto_launch values do not apply OS registration on launch. Scheduled task, LaunchAgent and XDG autostart creation/removal are therefore not runtime-verified.',
   ],
@@ -22,6 +27,10 @@ const root = await fs.mkdtemp(path.join(os.tmpdir(), 'installed-identity-'))
 const windows = process.platform === 'win32'
 const macos = process.platform === 'darwin'
 const ext = windows ? '.exe' : ''
+const verificationStartedAt = Date.now()
+const runtimeLogs = path.resolve('target', 'identity-runtime-logs')
+const appRuns = []
+evidence.applicationProcesses = []
 const run = (command, args = [], options = {}) =>
   execFileSync(command, args, {
     encoding: 'utf8',
@@ -74,6 +83,161 @@ function running(name) {
     .some((line) => path.basename(line.trim()) === name)
 }
 
+function applicationDataDirectory() {
+  const home = os.homedir()
+  const base = windows
+    ? powershell("[Environment]::GetFolderPath('ApplicationData')")
+    : macos
+      ? path.join(home, 'Library', 'Application Support')
+      : process.env.XDG_DATA_HOME && path.isAbsolute(process.env.XDG_DATA_HOME)
+        ? process.env.XDG_DATA_HOME
+        : path.join(home, '.local', 'share')
+  return path.join(base, identity.CVR_APP_ID)
+}
+
+async function launchApplication(app, stage) {
+  await fs.mkdir(runtimeLogs, { recursive: true })
+  const stdoutPath = path.join(runtimeLogs, `${stage}-stdout.log`)
+  const stderrPath = path.join(runtimeLogs, `${stage}-stderr.log`)
+  const stdout = await fs.open(stdoutPath, 'w')
+  const stderr = await fs.open(stderrPath, 'w')
+  const record = {
+    stage,
+    executable: app,
+    launcher: process.platform === 'linux' ? 'xvfb-run' : app,
+    stdoutPath,
+    stderrPath,
+    startedAt: new Date().toISOString(),
+  }
+  evidence.applicationProcesses.push(record)
+  try {
+    const child =
+      process.platform === 'linux'
+        ? spawn('xvfb-run', ['-a', app], {
+            stdio: ['ignore', stdout.fd, stderr.fd],
+          })
+        : spawn(app, [], { stdio: ['ignore', stdout.fd, stderr.fd] })
+    record.pid = child.pid
+    const closed = new Promise((resolve) => {
+      child.on('error', (error) => {
+        record.spawnError = error.message
+      })
+      child.on('exit', (exitCode, signal) => {
+        record.exitCode = exitCode
+        record.signal = signal
+        record.exitedAt = new Date().toISOString()
+      })
+      child.on('close', (exitCode, signal) => {
+        record.exitCode ??= exitCode
+        record.signal ??= signal
+        record.closed = true
+        record.closedAt = new Date().toISOString()
+        resolve()
+      })
+    })
+    appRuns.push({ child, closed, record })
+    return child
+  } finally {
+    await Promise.all([stdout.close(), stderr.close()])
+  }
+}
+
+async function waitForApplication(predicate, description) {
+  await waitFor(() => {
+    const record = appRuns.at(-1)?.record
+    assert.ok(
+      !record?.spawnError,
+      `Application spawn failed: ${record?.spawnError}`,
+    )
+    assert.ok(
+      !record?.closed,
+      `Application exited before ${description}: ${JSON.stringify(record)}`,
+    )
+    return predicate()
+  }, description)
+}
+
+async function stopApplication(app) {
+  if (running(identity.CVR_APP_BINARY)) {
+    if (windows)
+      powershell(
+        `Get-Process -Name '${identity.CVR_APP_BINARY}' -ErrorAction SilentlyContinue | Stop-Process -Force`,
+      )
+    else run('pkill', ['-f', app])
+  }
+  appProcess?.kill()
+  const current = appRuns.at(-1)
+  if (current) await Promise.race([current.closed, delay(3000)])
+  appProcess = undefined
+}
+
+async function captureApplicationLogs(stage) {
+  // Copy only this run's application logs on a fresh hosted runner, never configuration or credentials.
+  if (process.env.GITHUB_ACTIONS !== 'true') return
+  const output = path.join(runtimeLogs, stage)
+  try {
+    const logs = path.join(applicationDataDirectory(), 'logs')
+    for (const relative of ['', 'sidecar']) {
+      const directory = path.join(logs, relative)
+      const entries = await fs
+        .readdir(directory, { withFileTypes: true })
+        .catch((error) => {
+          if (error.code === 'ENOENT') return []
+          throw error
+        })
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith('.log')) continue
+        const source = path.join(directory, entry.name)
+        const metadata = await fs.stat(source)
+        if (metadata.mtimeMs < verificationStartedAt) continue
+        const destination = path.join(output, relative, entry.name)
+        await fs.mkdir(path.dirname(destination), { recursive: true })
+        await fs.copyFile(source, destination)
+      }
+    }
+  } catch (error) {
+    evidence.runtimeLogErrors ??= []
+    evidence.runtimeLogErrors.push(`${stage}: ${error.message}`)
+  }
+}
+
+function detachDmg(force = false) {
+  if (!mountedDmg) return
+  run('hdiutil', ['detach', mountedDmg, ...(force ? ['-force'] : [])])
+  mountedDmg = undefined
+  evidence.installer.dmgDetached = true
+}
+
+async function installMacDmg(artifacts, destination) {
+  const dmg = artifacts.find((file) => file.endsWith('.dmg'))
+  assert.ok(dmg, 'DMG installer is missing')
+  mountedDmg = path.join(root, 'dmg-mount')
+  await fs.mkdir(mountedDmg)
+  evidence.installer = { type: 'dmg', path: dmg, mountpoint: mountedDmg }
+  run('hdiutil', [
+    'attach',
+    dmg,
+    '-readonly',
+    '-nobrowse',
+    '-noautoopen',
+    '-mountpoint',
+    mountedDmg,
+  ])
+  const apps = (await fs.readdir(mountedDmg, { withFileTypes: true })).filter(
+    (entry) => entry.isDirectory() && entry.name.endsWith('.app'),
+  )
+  assert.equal(
+    apps.length,
+    1,
+    'Expected one application bundle in the DMG installer',
+  )
+  assert.equal(apps[0].name, `${identity.CVR_APP_NAME}.app`)
+  evidence.installer.applicationBundle = apps[0].name
+  privileged('ditto', [path.join(mountedDmg, apps[0].name), destination])
+  detachDmg()
+  check('installed application copied from packaged DMG')
+}
+
 async function verifyInstalledLauncher(app) {
   if (windows) {
     const shortcutName = `${identity.CVR_APP_NAME}.lnk`.replaceAll("'", "''")
@@ -103,22 +267,29 @@ async function verifyInstalledLauncher(app) {
     evidence.launcher = { plist, executable }
     check('installed application bundle executable target')
   } else {
-    const desktop = run('dpkg', ['-L', packageName])
+    const desktopFiles = run('dpkg', ['-L', packageName])
       .split('\n')
-      .find((file) =>
-        file.endsWith(`/applications/${identity.CVR_APP_BINARY}.desktop`),
+      .filter((file) => /\/applications\/[^/]+\.desktop$/.test(file))
+    const launchers = []
+    for (const desktop of desktopFiles) {
+      const entries = Object.fromEntries(
+        (await fs.readFile(desktop, 'utf8'))
+          .split(/\r?\n/)
+          .filter((line) => /^(Name|Exec)=/.test(line))
+          .map((line) => [
+            line.slice(0, line.indexOf('=')),
+            line.slice(line.indexOf('=') + 1),
+          ]),
       )
-    assert.ok(desktop, 'Installed desktop launcher is missing')
-    const entries = Object.fromEntries(
-      (await fs.readFile(desktop, 'utf8'))
-        .split(/\r?\n/)
-        .filter((line) => /^(Name|Exec)=/.test(line))
-        .map((line) => [
-          line.slice(0, line.indexOf('=')),
-          line.slice(line.indexOf('=') + 1),
-        ]),
+      if (entries.Name === identity.CVR_APP_NAME)
+        launchers.push({ desktop, entries })
+    }
+    assert.equal(
+      launchers.length,
+      1,
+      'Expected one installed desktop launcher with the configured display name',
     )
-    assert.equal(entries.Name, identity.CVR_APP_NAME)
+    const [{ desktop, entries }] = launchers
     const command = entries.Exec?.match(/^(?:"([^"\n]+)"|(\S+))/)
     assert.ok(command, 'Installed desktop launcher has no executable')
     const executable = command[1] ?? command[2]
@@ -138,6 +309,8 @@ let uninstaller
 let appUninstaller
 let packageName
 let appProcess
+let appExecutable
+let mountedDmg
 const driver = path.resolve(
   'target',
   'bundled-service',
@@ -157,17 +330,13 @@ try {
     toolsDirectory = path.join(appDirectory, 'resources')
     appUninstaller = path.join(appDirectory, 'uninstall.exe')
   } else if (macos) {
-    const app = artifacts
-      .find((file) => file.endsWith('/Info.plist'))
-      ?.replace(/\/Contents\/Info\.plist$/, '')
-    assert.ok(app, 'Application bundle is missing')
     appDirectory = path.join(
       '/Applications',
       `${identity.CVR_APP_NAME}.app`,
       'Contents',
       'MacOS',
     )
-    privileged('ditto', [app, path.dirname(path.dirname(appDirectory))])
+    await installMacDmg(artifacts, path.dirname(path.dirname(appDirectory)))
     toolsDirectory = path.join(
       path.dirname(appDirectory),
       'Resources',
@@ -191,6 +360,7 @@ try {
     assert.ok(listing.includes(`/usr/bin/${identity.CVR_CORE_NAME}`))
   }
   const app = path.join(appDirectory, `${identity.CVR_APP_BINARY}${ext}`)
+  appExecutable = app
   const stable = path.join(appDirectory, `${identity.CVR_CORE_NAME}${ext}`)
   const alpha = path.join(appDirectory, `${identity.CVR_CORE_ALPHA_NAME}${ext}`)
   const service = path.join(
@@ -304,21 +474,19 @@ try {
     }
   }
 
-  appProcess =
-    process.platform === 'linux'
-      ? spawn('xvfb-run', ['-a', app], { stdio: 'ignore' })
-      : spawn(app, [], { stdio: 'ignore' })
-  await waitFor(
+  appProcess = await launchApplication(app, 'service-launch')
+  await waitForApplication(
     () => running(identity.CVR_APP_BINARY),
     'installed main application process',
   )
   check('installed main application process name')
-  if (windows)
-    powershell(
-      `Get-Process -Name '${identity.CVR_APP_BINARY}' -ErrorAction SilentlyContinue | Stop-Process -Force`,
-    )
-  else run('pkill', ['-f', app])
-  appProcess = undefined
+  await waitForApplication(
+    () => running(identity.CVR_CORE_NAME),
+    'installed application service-managed stable core',
+  )
+  check('installed application service-managed stable core process name')
+  await stopApplication(app)
+  await captureApplicationLogs('service-launch')
   privileged(uninstaller, [])
   uninstaller = undefined
   if (windows)
@@ -341,25 +509,18 @@ try {
         .catch(() => null)),
     )
   check('configured service uninstallation')
-  appProcess =
-    process.platform === 'linux'
-      ? spawn('xvfb-run', ['-a', app], { stdio: 'ignore' })
-      : spawn(app, [], { stdio: 'ignore' })
-  await waitFor(
+  appProcess = await launchApplication(app, 'sidecar-launch')
+  await waitForApplication(
     () => running(identity.CVR_APP_BINARY),
     'installed application in sidecar mode',
   )
-  await waitFor(
+  await waitForApplication(
     () => running(identity.CVR_CORE_NAME),
     'application-owned sidecar core',
   )
   check('installed application sidecar core process name')
-  if (windows)
-    powershell(
-      `Get-Process -Name '${identity.CVR_APP_BINARY}' -ErrorAction SilentlyContinue | Stop-Process -Force`,
-    )
-  else run('pkill', ['-f', app])
-  appProcess = undefined
+  await stopApplication(app)
+  await captureApplicationLogs('sidecar-launch')
   if (windows) {
     powershell(
       `Start-Process -FilePath '${appUninstaller}' -ArgumentList '/S' -Wait`,
@@ -390,7 +551,17 @@ try {
   evidence.error = error.stack
   throw error
 } finally {
-  if (appProcess) appProcess.kill()
+  await delay(600)
+  await captureApplicationLogs('before-cleanup')
+  if (appProcess && appExecutable) {
+    try {
+      await stopApplication(appExecutable)
+    } catch (error) {
+      evidence.runtimeLogErrors ??= []
+      evidence.runtimeLogErrors.push(`Application cleanup: ${error.message}`)
+    }
+  }
+  await captureApplicationLogs('after-process-exit')
   if (uninstaller) {
     try {
       privileged(uninstaller, [])
@@ -403,10 +574,18 @@ try {
       )
     } catch {}
   }
+  if (mountedDmg) {
+    try {
+      detachDmg(true)
+    } catch (error) {
+      evidence.cleanupErrors ??= []
+      evidence.cleanupErrors.push(`DMG detach: ${error.message}`)
+    }
+  }
   await fs.mkdir('target', { recursive: true })
   await fs.writeFile(
     'target/identity-verification.json',
     JSON.stringify(evidence, null, 2),
   )
-  await fs.rm(root, { recursive: true, force: true })
+  if (!mountedDmg) await fs.rm(root, { recursive: true, force: true })
 }
