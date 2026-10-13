@@ -12,11 +12,16 @@ vi.mock('react', async (importOriginal) => ({
 }))
 vi.mock('@/utils/open-external-url', () => ({ openExternalUrl: vi.fn() }))
 
-beforeEach(() => {
+let notices: typeof import('@/services/notice-service')
+let NoticeManager: typeof import('./notice-manager')['NoticeManager']
+
+beforeEach(async () => {
   vi.stubEnv('VITE_CVR_CORE_NAME', 'verge-mihomo')
   vi.stubEnv('VITE_CVR_CORE_ALPHA_NAME', 'verge-mihomo-alpha')
   vi.resetModules()
-})
+  notices = await import('@/services/notice-service')
+  NoticeManager = (await import('./notice-manager')).NoticeManager
+}, 60_000)
 
 afterEach(async () => {
   const { getSnapshotNotices, hideNotice } = await import(
@@ -43,10 +48,7 @@ it.each([
 ])(
   'explains an occupied core during %s and preserves diagnostics',
   async (operation, detail) => {
-    const { showNotice, syncSidecarFailure } = await import(
-      '@/services/notice-service'
-    )
-    const { NoticeManager } = await import('./notice-manager')
+    const { showNotice, syncSidecarFailure } = notices
     if (operation === 'startup') {
       showNotice.error('settings.feedback.errors.clash.startFailed', detail)
     } else if (operation === 'restart') {

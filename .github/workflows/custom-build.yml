@@ -119,7 +119,7 @@ jobs:
         run: |
           pnpm test:identity
           pnpm typecheck
-          pnpm test --testTimeout=15000 src/utils/branding.test.ts src/services/i18n-branding.test.ts src/services/update.test.ts src/components/layout/notice-manager.test.ts
+          pnpm test src/utils/branding.test.ts src/services/i18n-branding.test.ts src/services/update.test.ts src/components/layout/notice-manager.test.ts
       - name: Build installers
         shell: bash
         run: pnpm build --ci --target ${{ matrix.target }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
