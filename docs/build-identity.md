@@ -145,11 +145,14 @@ the installers.
 
 macOS shutdown checks send SIGTERM to the recorded installed application PID,
 which invokes its normal configuration-save, core-stop and DNS-restore cleanup.
-The verifier requires an exit code of zero and both cores to stop before service
-removal. Cocoa application Quit and the Quit menu are not verified: Cocoa
-termination exposed an HTTP-plugin/WebKit deadlock during startup IPC on a
-hosted runner. Shutdown timeouts remain failures and capture a bounded stack
-sample for diagnosis.
+Ordinary shutdown requires an exit code of zero and both cores to stop before
+service removal. An existing HTTP-plugin/WebKit deadlock affected native final
+process exit after both Cocoa Quit and SIGTERM on hosted runners. If this
+launch's logs confirm successful cleanup, both cores are absent, and a stack
+sample matches that captured deadlock, the verifier cleans up only the revalidated
+owned stranded PID and records native shutdown as unverified. Unknown hangs
+remain failures. Cocoa application Quit and the Quit menu are not verified;
+this conditional process cleanup does not claim that Quit is fixed.
 
 Headless Linux/Xvfb verification uses the ordinary `theme_mode: light` setting
 instead of desktop theme-portal discovery. The verifier first generates the
