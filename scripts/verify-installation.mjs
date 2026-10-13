@@ -26,6 +26,10 @@ const evidence = {
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'installed-identity-'))
 const windows = process.platform === 'win32'
 const macos = process.platform === 'darwin'
+if (macos)
+  evidence.limitations.push(
+    'macOS shutdown verification uses the supported graceful SIGTERM cleanup path. Cocoa application Quit and the Quit menu are not verified; Cocoa termination exhibited an HTTP-plugin/WebKit shutdown deadlock during startup IPC on a hosted runner.',
+  )
 const ext = windows ? '.exe' : ''
 const verificationStartedAt = Date.now()
 const runtimeLogs = path.resolve('target', 'identity-runtime-logs')
@@ -94,6 +98,66 @@ function applicationDataDirectory() {
         ? process.env.XDG_DATA_HOME
         : path.join(home, '.local', 'share')
   return path.join(base, identity.CVR_APP_ID)
+}
+
+async function prepareLinuxHeadlessSettings(app) {
+  if (process.platform !== 'linux') return
+  assert.equal(
+    process.env.GITHUB_ACTIONS,
+    'true',
+    'Headless verification requires a fresh hosted runner',
+  )
+  const filename =
+    identity.CVR_CUSTOM_BUILD === '1'
+      ? `${identity.CVR_APP_BINARY}-settings.yaml`
+      : 'verge.yaml'
+  const settingsFile = path.join(applicationDataDirectory(), filename)
+  const existing = await fs.stat(settingsFile).catch((error) => {
+    if (error.code === 'ENOENT') return null
+    throw error
+  })
+  assert.equal(
+    existing,
+    null,
+    'Headless verification must not replace existing user settings',
+  )
+  try {
+    appProcess = await launchApplication(app, 'headless-settings-generation')
+    await waitForApplication(
+      async () =>
+        !!(await fs.stat(settingsFile).catch((error) => {
+          if (error.code === 'ENOENT') return null
+          throw error
+        })),
+      'compiled default settings generation',
+    )
+  } finally {
+    if (appProcess) await stopApplication(app, true)
+  }
+  await waitFor(
+    () => !running(identity.CVR_APP_BINARY),
+    'settings-generation application exit',
+  )
+  assert.ok(
+    !running(identity.CVR_CORE_NAME) && !running(identity.CVR_CORE_ALPHA_NAME),
+    'Settings-generation launch must leave no core running',
+  )
+  await captureApplicationLogs('headless-settings-generation')
+  const settings = await fs.readFile(settingsFile, 'utf8')
+  const theme = /^theme_mode:[ \t]*(?:system|"system"|'system')[ \t]*$/gm
+  assert.equal(
+    settings.match(theme)?.length,
+    1,
+    'Expected compiled default system theme in fresh settings',
+  )
+  await fs.writeFile(settingsFile, settings.replace(theme, 'theme_mode: light'))
+  evidence.headlessSettings = {
+    theme_mode: 'light',
+    generatedDefaultsPreserved: true,
+    settingsFile,
+    reason: 'Avoid desktop theme-portal discovery in the headless Xvfb session',
+  }
+  check('Linux headless settings prepared with compiled defaults preserved')
 }
 
 async function launchApplication(app, stage) {
@@ -179,41 +243,29 @@ async function stopApplication(app, force = false) {
       const pid = record?.pid
       assert.ok(
         Number.isInteger(pid) && pid > 0,
-        'Normal Quit requires a recorded application PID',
+        'Graceful shutdown requires a recorded application PID',
+      )
+      assert.equal(
+        run('ps', ['-p', String(pid), '-o', 'comm=']),
+        app,
+        'Graceful shutdown target must match the installed executable',
       )
       const request = {
         targetPid: pid,
+        signal: 'SIGTERM',
         requestedAt: new Date().toISOString(),
       }
-      record.normalQuit = request
-      const result = run(
-        'osascript',
-        [
-          '-l',
-          'JavaScript',
-          '-e',
-          `ObjC.import('AppKit');
-        const application = $.NSRunningApplication.runningApplicationWithProcessIdentifier(${pid});
-        if (ObjC.unwrap(application.executableURL.path) !== ${JSON.stringify(app)})
-          throw new Error('Normal Quit target does not match the installed executable');
-        Boolean(application.terminate);`,
-        ],
-        { timeout: 10000 },
-      )
-      request.accepted = result === 'true'
-      assert.ok(
-        request.accepted,
-        `macOS normal Quit request for PID ${pid} was rejected: ${result}`,
-      )
+      record.normalShutdown = request
+      process.kill(pid, 'SIGTERM')
       try {
         await waitFor(
           () => !running(identity.CVR_APP_BINARY),
-          'macOS application normal Quit',
+          'macOS graceful SIGTERM shutdown',
         )
       } catch (error) {
         request.samplePath = path.join(
           runtimeLogs,
-          `${record.stage}-normal-quit-sample.log`,
+          `${record.stage}-shutdown-sample.log`,
         )
         try {
           run('sample', [String(pid), '1', '1', '-file', request.samplePath], {
@@ -228,7 +280,19 @@ async function stopApplication(app, force = false) {
         () =>
           !running(identity.CVR_CORE_NAME) &&
           !running(identity.CVR_CORE_ALPHA_NAME),
-        'core shutdown after macOS application normal Quit',
+        'core shutdown after macOS graceful SIGTERM shutdown',
+      )
+      await waitFor(
+        () => record.exitedAt !== undefined,
+        'macOS graceful SIGTERM application exit status',
+      )
+      assert.equal(
+        record.exitCode,
+        0,
+        'macOS graceful SIGTERM shutdown must exit with code zero',
+      )
+      check(
+        'macOS graceful SIGTERM shutdown with application exit code zero and stopped cores',
       )
     } else {
       const pattern =
@@ -552,6 +616,7 @@ try {
     }
   }
 
+  await prepareLinuxHeadlessSettings(app)
   appProcess = await launchApplication(app, 'service-launch')
   await waitForApplication(
     () => running(identity.CVR_APP_BINARY),

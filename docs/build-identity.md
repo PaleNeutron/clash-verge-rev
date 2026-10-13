@@ -143,6 +143,21 @@ provenance and application runtime logs from the fresh runner. A separate
 `identity-diagnostics-*` artifact provides the same evidence without downloading
 the installers.
 
+macOS shutdown checks send SIGTERM to the recorded installed application PID,
+which invokes its normal configuration-save, core-stop and DNS-restore cleanup.
+The verifier requires an exit code of zero and both cores to stop before service
+removal. Cocoa application Quit and the Quit menu are not verified: Cocoa
+termination exposed an HTTP-plugin/WebKit deadlock during startup IPC on a
+hosted runner. Shutdown timeouts remain failures and capture a bounded stack
+sample for diagnosis.
+
+Headless Linux/Xvfb verification uses the ordinary `theme_mode: light` setting
+instead of desktop theme-portal discovery. The verifier first generates the
+application's compiled default settings, confirms that initialization left no
+application or core running, and changes only that field. It refuses to overwrite
+pre-existing settings and records this headless condition in the evidence.
+These checks do not verify default system-theme startup in a real desktop session.
+
 Scheduled task, LaunchAgent and XDG autostart creation/removal require toggling
 the setting in the running application. This workflow does not automate that
 GUI interaction, and prewriting the saved preference does not register the entry
